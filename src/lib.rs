@@ -4214,7 +4214,13 @@ mod tests {
             })
             .to_string(),
         );
-        assert!(quoted_path_feedback.is_none());
+        if cfg!(windows) {
+            assert!(quoted_path_feedback.is_none());
+        } else {
+            assert!(quoted_path_feedback
+                .as_deref()
+                .is_some_and(|feedback| feedback.contains("different shell/platform")));
+        }
 
         let ampersand_feedback = guard_hook_context(
             GuardHookEvent::PreToolUse,
