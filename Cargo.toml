@@ -15,8 +15,10 @@ include = [
     "/.mcp.json",
     "/.codex-plugin/plugin.json",
     "/docs/**/*.md",
+    "/docs/examples/**/*.json",
     "/schemas/**/*.json",
     "/src/**/*.rs",
+    "/tests/**/*.rs",
 ]
 
 [[bin]]

@@ -1,73 +1,134 @@
 # CDXCore
 
-CDXCore is a read-only Codex plugin, CLI, and MCP server for diagnosing MCP startup and configuration problems.
+CDXCore is a CLI and MCP server for diagnosing Codex MCP startup and
+configuration problems.
 
 The v1 target is Codex MCP configuration. Claude Desktop, Cursor, Windsurf, and VS Code adapters are intentionally left for later.
 
-## Install locally
+Important: do not install CDXCore through an MCP or plugin marketplace for normal
+use. Install the `cdxcore` CLI, then run `cdxcore setup codex`.
+
+## Features
+
+- Read-only Codex MCP config inspection and startup profiling.
+- Serena-style setup: install the `cdxcore` CLI, then let Codex launch
+  `cdxcore serve`.
+- Optional v2a command guard hooks are visible but inactive by default; they are
+  feedback-only and never block or rewrite commands.
+
+## Quick Start
+
+1. Install the prebuilt `cdxcore` CLI from the current release. The first
+   public artifact is `cdxcore-v0.1.0-x86_64-pc-windows-msvc.zip` for Windows
+   x64.
+2. Verify that the command is available:
+
+   ```powershell
+   cdxcore --version
+   ```
+
+3. Configure Codex:
+
+   ```powershell
+   cdxcore setup codex
+   ```
+
+4. Start a new Codex session. Codex launches `cdxcore serve` as the MCP server.
+
+## Prerequisites
+
+CDXCore should be installed as a normal CLI package or prebuilt binary. For
+normal use, Rust and this source repository are not prerequisites.
+
+The only path requirement is that `cdxcore` must be available to the app that
+launches Codex. GUI-launched clients can have a different PATH than an
+interactive terminal.
+
+## Installing and Initialising CDXCore
+
+Install a prebuilt `cdxcore` CLI for your platform from the package or release
+channel published for the current CDXCore release.
+
+Current prebuilt artifact:
+
+- Windows x64: `cdxcore-v0.1.0-x86_64-pc-windows-msvc.zip`
+
+Download the ZIP from
+`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.0`, extract it, and put
+the extracted directory on the PATH used by Codex.
+
+Upon completion, the command `cdxcore` should be available:
 
 ```powershell
-cargo build --release
+cdxcore --version
 ```
 
-Put the resulting `cdxcore` binary on the PATH used by the app that launches Codex, or change the plugin `.mcp.json` command to an absolute path. GUI-launched clients often have a different PATH than an interactive terminal, which is one of the failure modes CDXCore reports.
+To initialise CDXCore for Codex, run:
 
-## Install as a local Codex plugin
+```powershell
+cdxcore setup codex
+```
 
-Use the CLI directly if you only want terminal diagnostics. To test the plugin/MCP surface in Codex:
+This configures Codex to launch:
 
-1. Build the binary:
+```toml
+[mcp_servers.cdxcore]
+command = "cdxcore"
+args = ["serve"]
+```
 
-   ```powershell
-   cargo build --release
-   ```
+The setup command prefers:
 
-2. Decide how Codex will launch the MCP server. Keep `.mcp.json` as `command: "cdxcore"` only when the Codex GUI/client PATH can resolve that binary. Otherwise edit your local test copy of `.mcp.json` to use the absolute binary path, for example:
+```powershell
+codex mcp add cdxcore -- cdxcore serve
+```
 
-   ```json
-   {
-     "mcpServers": {
-       "cdxcore": {
-         "command": "C:\\Users\\you\\Desktop\\CDXCore\\target\\release\\cdxcore.exe",
-         "args": ["serve"]
-       }
-     }
-   }
-   ```
+If the Codex CLI is unavailable, use the manual fallback below.
 
-3. Add this repo to a local Codex plugin marketplace entry that points at the repository root, then install it from that marketplace:
+## Updating CDXCore
 
-   ```json
-   {
-     "name": "cdxcore",
-     "source": {
-       "source": "local",
-       "path": "C:\\Users\\you\\Desktop\\CDXCore"
-     },
-     "policy": {
-       "installation": "AVAILABLE",
-       "authentication": "ON_INSTALL"
-     },
-     "category": "Developer Tools"
-   }
-   ```
+Update CDXCore with the same package manager or release channel used for the
+original CLI install, then rerun setup if the release notes say the Codex MCP
+entry changed:
 
-   ```powershell
-   codex plugin add cdxcore@personal
-   ```
+```powershell
+cdxcore setup codex
+```
 
-   The default personal marketplace is discovered from `%USERPROFILE%\.agents\plugins\marketplace.json`. For a non-default local marketplace, add that marketplace first and install with its marketplace name instead of `personal`.
+## Uninstalling CDXCore
 
-4. Start a new Codex thread and use the CDXCore MCP tools, or run:
+Uninstall CDXCore with the same package manager or release channel used for the
+original CLI install. If you also want to remove the Codex MCP entry, delete the
+`[mcp_servers.cdxcore]` block from `~/.codex/config.toml`.
 
-   ```powershell
-   cdxcore inspect-config
-   cdxcore profile
-   ```
+Normal users should not clone this repository, install Rust, or build from
+source.
+
+## Manual fallback
+
+Add this to `~/.codex/config.toml` or to `$CODEX_HOME/config.toml` when
+`CODEX_HOME` is set:
+
+```toml
+[mcp_servers.cdxcore]
+startup_timeout_sec = 15
+command = "cdxcore"
+args = ["serve"]
+```
+
+For local developer testing only, an absolute path is acceptable:
+
+```toml
+[mcp_servers.cdxcore]
+startup_timeout_sec = 15
+command = "C:\\Users\\kuh\\Desktop\\CDXCore\\target\\release\\cdxcore.exe"
+args = ["serve"]
+```
 
 ## Commands
 
 ```powershell
+cdxcore setup codex
 cdxcore inspect-config
 cdxcore profile
 cdxcore validate <server>
@@ -77,6 +138,20 @@ cdxcore serve
 ```
 
 Add `--json` for the stable `cdxcore.diagnostics.v1` JSON schema. The schema is committed at `schemas/cdxcore.diagnostics.v1.schema.json`.
+
+Optional command-guard hook entrypoints:
+
+```powershell
+cdxcore setup codex --enable-command-guard
+cdxcore guard-hook pre-tool-use
+cdxcore guard-hook post-tool-use
+```
+
+These are not MCP tools and are not wired into the default plugin manifest.
+They are feedback-only Codex hook commands for users who manually opt in.
+Hook stdout is contract-only: empty for no feedback or one
+`hookSpecificOutput.additionalContext` JSON object. `--json` does not change
+hook output.
 
 Exit codes:
 
@@ -89,18 +164,26 @@ Exit codes:
 
 ## Read-only contract
 
-CDXCore does not edit config files, delete state, reset state, print raw env values by default, or call arbitrary MCP tools. It launches configured stdio servers only when the user explicitly runs `profile`, `validate <server>`, or the equivalent MCP diagnostic tool. Child processes are killed after profiling.
+CDXCore diagnostic commands and MCP tools do not edit config files, delete state,
+reset state, print raw env values by default, or call arbitrary MCP tools. The
+`setup` command is the explicit exception: it installs the requested Codex MCP
+entry, and `setup codex --enable-command-guard` also opts into feedback-only hook
+configuration. Profiling launches configured stdio servers only when the user
+explicitly runs `profile`, `validate <server>`, or the equivalent MCP diagnostic
+tool. Child processes are killed after profiling.
 
 `safe_config_snippet` values use placeholders such as `${TOKEN_ENV_VAR}` or `<absolute path>` and never echo discovered secret values.
 
-## Codex plugin packaging
+## Advanced developer plugin testing
 
 This repo includes:
 
 - `.codex-plugin/plugin.json`
 - `.mcp.json`
 
-The plugin manifest explicitly references `.mcp.json`. The default MCP entry runs:
+These files are for plugin-wrapper and local marketplace testing only. They are
+not the normal user install path. The plugin manifest references `.mcp.json`,
+whose default MCP entry runs:
 
 ```json
 {
@@ -110,6 +193,32 @@ The plugin manifest explicitly references `.mcp.json`. The default MCP entry run
 ```
 
 If Codex cannot resolve `cdxcore` from its GUI/client PATH, use the absolute path to the binary in `.mcp.json`.
+
+## Optional v2a command guard
+
+The command guard is not active by default. To opt in:
+
+```powershell
+cdxcore setup codex --enable-command-guard
+```
+
+The standalone hook example lives at
+`docs/examples/codex-command-guard-hooks.json`. Keep an explicit low timeout so a
+feedback-only hook cannot stall tool execution. If the hook environment cannot
+resolve `cdxcore`, replace the command with an absolute executable path. On
+Windows, quote paths with spaces in the hook command itself.
+
+## Developer local build/testing
+
+Developer builds are for CDXCore contributors and local validation only:
+
+```powershell
+cargo build --release
+```
+
+When testing that local binary with Codex, use an absolute MCP command path as
+shown in the manual fallback section. Do not use local builds as the normal user
+install flow.
 
 ## Effective surface caveat
 

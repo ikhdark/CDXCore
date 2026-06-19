@@ -1,19 +1,27 @@
 # CDXCore Roadmap (Index)
 
-One-screen index of CDXCore's planned scope. Only **v1** is being built; v2 and v3
-are deferred design notes, not implementation.
+One-screen index of CDXCore's planned scope. **v1** is the default product
+surface. **v2a** is an optional, feedback-only hook module. v2b, v2c, and v3 are
+deferred design notes, not implementation.
 
 ## v1 — Read-only Codex MCP config/startup profiler
 
 CDXCore v1 is a strictly **read-only** Codex MCP **config/startup profiler**:
 inspect Codex MCP config, statically diagnose it, and profile stdio server
-startup/handshake on explicit command. **This is the only MVP being built.**
+startup/handshake on explicit command. **This is the default MVP surface.**
 
-## v2 — Command-Guard (deferred)
+## v2a — Command-Guard (optional, feedback-only)
 
-Hook-first command guard for AI-agent shell commands. **Orthogonal to v1** — a
-separate module on its own timeline, not part of the v1 MVP. See
+Hook-first command guard for AI-agent shell commands. v2a is visible but inactive
+by default and must be explicitly enabled with
+`cdxcore setup codex --enable-command-guard`. It emits feedback only: no command
+blocking, input rewrite, or retry ledger. See
 [v2-command-guard.md](v2-command-guard.md).
+
+## v2b/v2c — Command-Guard escalation (deferred)
+
+v2b retry-ledger behavior and v2c blocking behavior are deferred and must remain
+manual opt-in if implemented later.
 
 ## v3 — Cross-client fleet view (deferred)
 

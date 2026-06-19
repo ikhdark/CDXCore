@@ -10,7 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Instant;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::time::{timeout, Duration};
 
@@ -18,6 +18,8 @@ pub const SCHEMA_VERSION: &str = "cdxcore.diagnostics.v1";
 const INIT_TIMEOUT: Duration = Duration::from_millis(3_000);
 const TOOLS_TIMEOUT: Duration = Duration::from_millis(3_000);
 const MAX_TOOL_PAGES: usize = 8;
+const GUARD_CONTEXT_CHAR_LIMIT: usize = 1_200;
+const GUARD_STDIN_BYTE_LIMIT: usize = 128 * 1024;
 const SECRET_TERMS: &[&str] = &[
     "token",
     "key",
@@ -36,10 +38,15 @@ const SECRET_TERMS: &[&str] = &[
 #[command(
     name = "cdxcore",
     version,
-    about = "Read-only MCP diagnostics for Codex"
+    about = "Read-only MCP diagnostics for Codex",
+    after_help = "Optional command guard: available with `cdxcore setup codex --enable-command-guard`; inactive by default."
 )]
 pub struct Cli {
-    #[arg(long, global = true, help = "Emit stable JSON output")]
+    #[arg(
+        long,
+        global = true,
+        help = "Emit stable JSON output for diagnostic commands"
+    )]
     pub json: bool,
     #[command(subcommand)]
     pub command: CliCommand,
@@ -47,12 +54,49 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum CliCommand {
+    #[command(about = "Configure CDXCore for an MCP client")]
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommand,
+    },
     InspectConfig,
     Profile,
-    Validate { server: String },
-    DiagnoseRuntime { server: String },
+    Validate {
+        server: String,
+    },
+    DiagnoseRuntime {
+        server: String,
+    },
     SuggestFixes,
     Serve,
+    #[command(about = "Run optional feedback-only Codex command guard hooks")]
+    GuardHook {
+        #[command(subcommand)]
+        command: GuardHookCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SetupCommand {
+    #[command(
+        about = "Configure Codex to launch `cdxcore serve`",
+        after_help = "Default setup installs only the CDXCore MCP server. Add `--enable-command-guard` to opt into feedback-only command guard hooks."
+    )]
+    Codex {
+        #[arg(
+            long,
+            help = "Opt into feedback-only Codex command guard hooks after installing the MCP server"
+        )]
+        enable_command_guard: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum GuardHookCommand {
+    #[command(about = "Run the optional feedback-only PreToolUse command guard")]
+    PreToolUse,
+    #[command(about = "Run the optional feedback-only PostToolUse command guard")]
+    PostToolUse,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -246,10 +290,12 @@ enum RunMode {
 
 pub async fn run_cli(cli: Cli) -> Result<i32> {
     match cli.command {
+        CliCommand::Setup { command } => run_setup(command).await,
         CliCommand::Serve => {
             run_mcp_stdio_server().await?;
             Ok(0)
         }
+        CliCommand::GuardHook { command } => Ok(run_guard_hook(command).await),
         CliCommand::InspectConfig => {
             let envelope = build_diagnostics(RunMode::StaticAll).await?;
             write_output(&envelope, cli.json)?;
@@ -276,6 +322,459 @@ pub async fn run_cli(cli: Cli) -> Result<i32> {
             Ok(exit_for(&envelope))
         }
     }
+}
+
+async fn run_setup(command: SetupCommand) -> Result<i32> {
+    match command {
+        SetupCommand::Codex {
+            enable_command_guard,
+        } => run_setup_codex(enable_command_guard).await,
+    }
+}
+
+async fn run_setup_codex(enable_command_guard: bool) -> Result<i32> {
+    match run_codex_mcp_add().await {
+        Ok(()) => {
+            println!("Configured Codex MCP server `cdxcore`.");
+            println!("Codex will launch: cdxcore serve");
+        }
+        Err(err) => {
+            eprintln!("Could not run `codex mcp add cdxcore -- cdxcore serve`: {err}");
+            print_codex_manual_mcp_fallback();
+            return Ok(1);
+        }
+    }
+
+    if enable_command_guard {
+        let hooks_path = codex_user_hooks_path();
+        let changed = install_command_guard_hooks(&hooks_path)?;
+        if changed {
+            println!(
+                "Enabled optional CDXCore command guard hooks at {}.",
+                display_path(&hooks_path)
+            );
+        } else {
+            println!(
+                "Optional CDXCore command guard hooks were already present at {}.",
+                display_path(&hooks_path)
+            );
+        }
+        println!("The command guard is feedback-only; it does not block or rewrite commands.");
+    } else {
+        print_command_guard_opt_in_hint();
+    }
+
+    Ok(0)
+}
+
+async fn run_codex_mcp_add() -> Result<()> {
+    let output = Command::new("codex")
+        .args(["mcp", "add", "cdxcore", "--", "cdxcore", "serve"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .await;
+
+    match output {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let status = output.status.code().map_or_else(
+                || "terminated by signal".to_string(),
+                |code| code.to_string(),
+            );
+            Err(anyhow!("codex exited with status {status}"))
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(anyhow!("codex CLI not found")),
+        Err(err) => Err(err).context("launch codex CLI"),
+    }
+}
+
+fn print_command_guard_opt_in_hint() {
+    println!("Optional: CDXCore command guard is available.");
+    println!("Enable it with:");
+    println!("  cdxcore setup codex --enable-command-guard");
+}
+
+fn print_codex_manual_mcp_fallback() {
+    eprintln!("Manual fallback: add this to ~/.codex/config.toml or $CODEX_HOME/config.toml:");
+    eprintln!("[mcp_servers.cdxcore]");
+    eprintln!("startup_timeout_sec = 15");
+    eprintln!("command = \"cdxcore\"");
+    eprintln!("args = [\"serve\"]");
+}
+
+fn codex_home_path() -> PathBuf {
+    codex_home_path_from_env(env::var_os("CODEX_HOME"), home_dir())
+}
+
+fn codex_home_path_from_env(codex_home: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
+    codex_home
+        .map(PathBuf::from)
+        .or_else(|| home.map(|home| home.join(".codex")))
+        .unwrap_or_else(|| PathBuf::from(".codex"))
+}
+
+fn codex_user_hooks_path() -> PathBuf {
+    codex_home_path().join("hooks.json")
+}
+
+fn install_command_guard_hooks(path: &Path) -> Result<bool> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", display_path(parent)))?;
+    }
+
+    let mut root = if path.exists() {
+        let text =
+            fs::read_to_string(path).with_context(|| format!("read {}", display_path(path)))?;
+        if text.trim().is_empty() {
+            json!({ "hooks": {} })
+        } else {
+            serde_json::from_str(&text).with_context(|| format!("parse {}", display_path(path)))?
+        }
+    } else {
+        json!({ "hooks": {} })
+    };
+
+    let hooks = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("{} must contain a JSON object", display_path(path)))?
+        .entry("hooks")
+        .or_insert_with(|| json!({}));
+    let hooks = hooks
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("{}.hooks must contain a JSON object", display_path(path)))?;
+
+    let mut changed = false;
+    changed |= ensure_command_guard_hook(
+        hooks,
+        "PreToolUse",
+        "cdxcore guard-hook pre-tool-use",
+        "CDXCore command guard",
+    )?;
+    changed |= ensure_command_guard_hook(
+        hooks,
+        "PostToolUse",
+        "cdxcore guard-hook post-tool-use",
+        "CDXCore command guard",
+    )?;
+
+    if changed {
+        let mut text = serde_json::to_string_pretty(&root)?;
+        text.push('\n');
+        fs::write(path, text).with_context(|| format!("write {}", display_path(path)))?;
+    }
+
+    Ok(changed)
+}
+
+fn ensure_command_guard_hook(
+    hooks: &mut serde_json::Map<String, JsonValue>,
+    event: &str,
+    command: &str,
+    status_message: &str,
+) -> Result<bool> {
+    let event_value = hooks
+        .entry(event.to_string())
+        .or_insert_with(|| JsonValue::Array(Vec::new()));
+    let event_groups = event_value
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("hooks.{event} must contain an array"))?;
+
+    if event_groups
+        .iter()
+        .any(|group| hook_group_contains_command(group, command))
+    {
+        return Ok(false);
+    }
+
+    event_groups.push(json!({
+        "matcher": "Bash",
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": 3,
+            "statusMessage": status_message
+        }]
+    }));
+    Ok(true)
+}
+
+fn hook_group_contains_command(group: &JsonValue, command: &str) -> bool {
+    group
+        .get("hooks")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|handlers| {
+            handlers.iter().any(|handler| {
+                handler.get("type").and_then(JsonValue::as_str) == Some("command")
+                    && handler.get("command").and_then(JsonValue::as_str) == Some(command)
+            })
+        })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GuardHookEvent {
+    PreToolUse,
+    PostToolUse,
+}
+
+impl GuardHookEvent {
+    fn as_str(self) -> &'static str {
+        match self {
+            GuardHookEvent::PreToolUse => "PreToolUse",
+            GuardHookEvent::PostToolUse => "PostToolUse",
+        }
+    }
+}
+
+async fn run_guard_hook(command: GuardHookCommand) -> i32 {
+    let event = match command {
+        GuardHookCommand::PreToolUse => GuardHookEvent::PreToolUse,
+        GuardHookCommand::PostToolUse => GuardHookEvent::PostToolUse,
+    };
+    let mut bytes = Vec::new();
+    let mut stdin = tokio::io::stdin().take((GUARD_STDIN_BYTE_LIMIT + 1) as u64);
+    if stdin.read_to_end(&mut bytes).await.is_err() || bytes.len() > GUARD_STDIN_BYTE_LIMIT {
+        return 0;
+    }
+    let Ok(input) = String::from_utf8(bytes) else {
+        return 0;
+    };
+    if let Some(output) = guard_hook_output(event, &input) {
+        let mut stdout = tokio::io::stdout();
+        let _ = stdout.write_all(output.as_bytes()).await;
+        let _ = stdout.write_all(b"\n").await;
+        let _ = stdout.flush().await;
+    }
+    0
+}
+
+fn guard_hook_output(event: GuardHookEvent, input: &str) -> Option<String> {
+    let context = guard_hook_context(event, input)?;
+    Some(
+        json!({
+            "hookSpecificOutput": {
+                "hookEventName": event.as_str(),
+                "additionalContext": context
+            }
+        })
+        .to_string(),
+    )
+}
+
+fn guard_hook_context(event: GuardHookEvent, input: &str) -> Option<String> {
+    let value: JsonValue = serde_json::from_str(input).ok()?;
+    let object = value.as_object()?;
+    if let Some(input_event) = object
+        .get("hook_event_name")
+        .or_else(|| object.get("hookEventName"))
+        .and_then(JsonValue::as_str)
+    {
+        if input_event != event.as_str() {
+            return None;
+        }
+    }
+    if object.get("tool_name").and_then(JsonValue::as_str) != Some("Bash") {
+        return None;
+    }
+    let command = object
+        .get("tool_input")
+        .and_then(|tool_input| tool_input.get("command"))
+        .and_then(JsonValue::as_str)?;
+
+    let feedback = guard_feedback_for_command(event, command);
+    sanitize_guard_context(&feedback.join("\n"))
+}
+
+fn guard_feedback_for_command(event: GuardHookEvent, command: &str) -> Vec<String> {
+    if event != GuardHookEvent::PreToolUse {
+        return Vec::new();
+    }
+
+    let mut feedback = Vec::new();
+    if looks_like_platform_mismatch(command) {
+        feedback.push(
+            "CDXCore: command syntax appears to target a different shell/platform than this session."
+                .to_string(),
+        );
+    }
+    if has_unquoted_windows_path_with_spaces(command) {
+        feedback.push(
+            "CDXCore: quote Windows paths that contain spaces before running this command."
+                .to_string(),
+        );
+    }
+    if has_risky_validation_semicolon(command) {
+        feedback.push(
+            "CDXCore: a validation/build/test command is followed by another command with ';'; use an explicit success gate if the second command depends on the first."
+                .to_string(),
+        );
+    }
+    if has_failure_hiding_pipeline(command) {
+        feedback.push(
+            "CDXCore: this validation/build/test pipeline may hide the original command failure; preserve or inspect the upstream exit status."
+                .to_string(),
+        );
+    }
+    if has_suspicious_single_ampersand(command) {
+        feedback.push(
+            "CDXCore: single '&' can act as a command separator on Windows; use explicit success handling if commands depend on each other."
+                .to_string(),
+        );
+    }
+    if looks_destructive(command) {
+        feedback.push(
+            "CDXCore: destructive-looking command detected; verify the target path and intent before running it."
+                .to_string(),
+        );
+    }
+    feedback
+}
+
+fn sanitize_guard_context(context: &str) -> Option<String> {
+    let redacted = redact_text(context, &[]);
+    let capped: String = redacted.chars().take(GUARD_CONTEXT_CHAR_LIMIT).collect();
+    let final_redacted = redact_text(&capped, &[]);
+    let trimmed = final_redacted.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn looks_like_platform_mismatch(command: &str) -> bool {
+    let lower = command.trim_start().to_ascii_lowercase();
+    #[cfg(windows)]
+    {
+        lower.starts_with("export ")
+            || lower.starts_with("sudo ")
+            || lower.starts_with("chmod ")
+            || lower.starts_with("chown ")
+            || lower.contains(" /dev/null")
+            || lower.contains(" 2>/dev/null")
+            || lower.contains(" >/dev/null")
+    }
+    #[cfg(not(windows))]
+    {
+        lower.starts_with("set-executionpolicy ")
+            || lower.starts_with("get-childitem ")
+            || lower.starts_with("remove-item ")
+            || lower.contains(".exe ")
+            || lower.contains(".cmd ")
+            || lower.contains(":\\")
+    }
+}
+
+fn has_unquoted_windows_path_with_spaces(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    for needle in [":\\program files\\", ":\\program files (x86)\\"] {
+        let mut search_start = 0usize;
+        while let Some(relative_idx) = lower[search_start..].find(needle) {
+            let idx = search_start + relative_idx;
+            if idx < 2 || !is_quoted_at(command, idx - 2) {
+                return true;
+            }
+            search_start = idx + needle.len();
+        }
+    }
+    false
+}
+
+fn is_quoted_at(command: &str, idx: usize) -> bool {
+    command
+        .as_bytes()
+        .get(idx)
+        .is_some_and(|byte| matches!(byte, b'"' | b'\''))
+}
+
+fn has_risky_validation_semicolon(command: &str) -> bool {
+    command
+        .split(';')
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| {
+            looks_like_validation_command(pair[0]) && looks_like_success_dependent_command(pair[1])
+        })
+}
+
+fn has_failure_hiding_pipeline(command: &str) -> bool {
+    command
+        .split('|')
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| {
+            looks_like_validation_command(pair[0])
+                && contains_any_ascii_case(pair[1], &["grep", "select-string"])
+        })
+}
+
+fn has_suspicious_single_ampersand(command: &str) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    if command.trim_start().starts_with('&') {
+        return false;
+    }
+    command
+        .split(" & ")
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| looks_like_validation_command(pair[0]) && !pair[1].trim().is_empty())
+}
+
+fn looks_destructive(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    lower.contains("rm -rf")
+        || lower.contains("rm -fr")
+        || (lower.contains("remove-item") && lower.contains("-recurse"))
+        || lower.contains("del /s")
+        || lower.contains("rmdir /s")
+        || lower.contains("git reset --hard")
+        || lower.contains("git clean -fd")
+        || lower.contains("git clean -df")
+}
+
+fn looks_like_validation_command(command: &str) -> bool {
+    contains_any_ascii_case(
+        command,
+        &[
+            "cargo test",
+            "cargo clippy",
+            "cargo build",
+            "npm test",
+            "npm run build",
+            "pnpm test",
+            "pnpm build",
+            "pnpm run build",
+            "pytest",
+            "go test",
+            "dotnet test",
+            "mvn test",
+        ],
+    )
+}
+
+fn looks_like_success_dependent_command(command: &str) -> bool {
+    contains_any_ascii_case(
+        command,
+        &[
+            "cargo package",
+            "cargo publish",
+            "npm publish",
+            "pnpm publish",
+            "git commit",
+            "git push",
+            "deploy",
+            "release",
+            "docker push",
+            "gh release",
+        ],
+    )
+}
+
+fn contains_any_ascii_case(haystack: &str, needles: &[&str]) -> bool {
+    let lower = haystack.to_ascii_lowercase();
+    needles.iter().any(|needle| lower.contains(needle))
 }
 
 async fn build_diagnostics(mode: RunMode) -> Result<DiagnosticEnvelope> {
@@ -472,10 +971,7 @@ fn plugin_matches(server: &ServerConfig, plugin: &str) -> bool {
 }
 
 fn codex_user_config_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".codex")
-        .join("config.toml")
+    codex_home_path().join("config.toml")
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -700,17 +1196,20 @@ fn sensitive_literals_from_toml(
 
 fn discover_plugin_servers() -> Discovery {
     let mut discovery = Discovery::default();
-    let Some(home) = home_dir() else {
+    let codex_plugin_root = codex_home_path().join("plugins").join("cache");
+    let mut roots = vec![codex_plugin_root.clone()];
+    if let Some(home) = home_dir() {
+        let default_codex_plugin_root = home.join(".codex").join("plugins").join("cache");
+        if default_codex_plugin_root != codex_plugin_root {
+            roots.push(default_codex_plugin_root);
+        }
+        roots.push(home.join(".agents").join("plugins"));
+    } else {
         discovery.incomplete_effective_surface = true;
         discovery
             .notices
-            .push("could not locate home directory for plugin cache discovery".to_string());
-        return discovery;
-    };
-    let roots = [
-        home.join(".codex").join("plugins").join("cache"),
-        home.join(".agents").join("plugins"),
-    ];
+            .push("could not locate home directory for legacy plugin cache discovery".to_string());
+    }
     for root in roots {
         if !root.exists() {
             discovery.incomplete_effective_surface = true;
@@ -2428,6 +2927,323 @@ fn mcp_error(id: Option<JsonValue>, code: i64, message: &str) -> JsonValue {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn install_command_guard_hooks_writes_opt_in_hooks_json() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("hooks.json");
+
+        assert!(install_command_guard_hooks(&path).unwrap());
+        assert!(!install_command_guard_hooks(&path).unwrap());
+
+        let text = fs::read_to_string(path).unwrap();
+        let value: JsonValue = serde_json::from_str(&text).unwrap();
+        let hooks = value.get("hooks").and_then(JsonValue::as_object).unwrap();
+        assert!(hook_group_contains_command(
+            hooks
+                .get("PreToolUse")
+                .and_then(JsonValue::as_array)
+                .unwrap()
+                .first()
+                .unwrap(),
+            "cdxcore guard-hook pre-tool-use"
+        ));
+        assert!(hook_group_contains_command(
+            hooks
+                .get("PostToolUse")
+                .and_then(JsonValue::as_array)
+                .unwrap()
+                .first()
+                .unwrap(),
+            "cdxcore guard-hook post-tool-use"
+        ));
+    }
+
+    #[test]
+    fn codex_home_path_honors_codex_home_override() {
+        assert_eq!(
+            codex_home_path_from_env(
+                Some(OsString::from("C:\\custom-codex-home")),
+                Some(PathBuf::from("C:\\Users\\example"))
+            ),
+            PathBuf::from("C:\\custom-codex-home")
+        );
+        assert_eq!(
+            codex_home_path_from_env(None, Some(PathBuf::from("C:\\Users\\example"))),
+            PathBuf::from("C:\\Users\\example").join(".codex")
+        );
+    }
+
+    #[test]
+    fn guard_hook_noop_cases_are_silent() {
+        assert!(guard_hook_output(GuardHookEvent::PreToolUse, "").is_none());
+        assert!(guard_hook_output(GuardHookEvent::PreToolUse, "{").is_none());
+        assert!(guard_hook_output(GuardHookEvent::PreToolUse, "[]").is_none());
+        assert!(guard_hook_output(
+            GuardHookEvent::PreToolUse,
+            &json!({"tool_name":"Read","tool_input":{"command":"rm -rf target"}}).to_string()
+        )
+        .is_none());
+        assert!(guard_hook_output(
+            GuardHookEvent::PreToolUse,
+            &json!({"tool_name":"Bash","tool_input":{}}).to_string()
+        )
+        .is_none());
+        assert!(guard_hook_output(
+            GuardHookEvent::PreToolUse,
+            &json!({"tool_name":"Bash","tool_input":{"command":false}}).to_string()
+        )
+        .is_none());
+        assert!(guard_hook_output(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "hook_event_name":"PostToolUse",
+                "tool_name":"Bash",
+                "tool_input":{"command":"rm -rf target"}
+            })
+            .to_string()
+        )
+        .is_none());
+        assert!(guard_hook_output(
+            GuardHookEvent::PreToolUse,
+            &json!({"tool_name":"apply_patch","tool_input":{"command":"rm -rf target"}})
+                .to_string()
+        )
+        .is_none());
+        assert!(guard_hook_output(
+            GuardHookEvent::PreToolUse,
+            &json!({"tool_name":"mcp__server__tool","tool_input":{"command":"rm -rf target"}})
+                .to_string()
+        )
+        .is_none());
+        assert!(guard_hook_output(
+            GuardHookEvent::PostToolUse,
+            &json!({"tool_name":"Bash","tool_input":{"command":"rm -rf target"}}).to_string()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn guard_hook_feedback_shape_is_exact_and_non_blocking() {
+        let output = guard_hook_output(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "hook_event_name":"PreToolUse",
+                "tool_name":"Bash",
+                "tool_input":{"command":"rm -rf target"}
+            })
+            .to_string(),
+        )
+        .expect("feedback output");
+        let value: JsonValue = serde_json::from_str(&output).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(object.len(), 1);
+        let hook_output = object
+            .get("hookSpecificOutput")
+            .and_then(JsonValue::as_object)
+            .unwrap();
+        assert_eq!(hook_output.len(), 2);
+        assert_eq!(
+            hook_output.get("hookEventName").and_then(JsonValue::as_str),
+            Some("PreToolUse")
+        );
+        assert!(hook_output
+            .get("additionalContext")
+            .and_then(JsonValue::as_str)
+            .unwrap()
+            .contains("destructive-looking"));
+        for forbidden in [
+            "permissionDecision",
+            "permissionDecisionReason",
+            "updatedInput",
+            "updatedMCPToolOutput",
+            "suppressOutput",
+            "interrupt",
+            "decision",
+            "reason",
+            "continue",
+            "stopReason",
+            "systemMessage",
+            "updatedPermissions",
+        ] {
+            assert!(!output.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn guard_context_is_redacted_capped_and_empty_safe() {
+        let marker = ["sk", "-", "GUARDLEAK", "-", "1234567890abcdef"].join("");
+        let context = format!("token {marker} {}", "x".repeat(2_000));
+        let sanitized = sanitize_guard_context(&context).unwrap();
+        assert!(!sanitized.contains(&marker));
+        assert!(sanitized.chars().count() <= GUARD_CONTEXT_CHAR_LIMIT);
+        assert!(sanitize_guard_context(" \n\t ").is_none());
+    }
+
+    #[test]
+    fn guard_hook_pre_rules_are_conservative() {
+        let risky_semicolon = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"cargo test; cargo package --allow-dirty --list"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(risky_semicolon.contains("validation/build/test"));
+
+        let normal_semicolon = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"Write-Host one; Write-Host two"}
+            })
+            .to_string(),
+        );
+        assert!(normal_semicolon.is_none());
+
+        let reporting_semicolon = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"cargo test; echo done"}
+            })
+            .to_string(),
+        );
+        assert!(reporting_semicolon.is_none());
+
+        let risky_pipeline = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"cargo test | Select-String failed"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(risky_pipeline.contains("pipeline"));
+
+        let normal_pipeline = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"Get-Process | Sort-Object CPU"}
+            })
+            .to_string(),
+        );
+        assert!(normal_pipeline.is_none());
+    }
+
+    #[test]
+    fn guard_hook_detects_quoting_platform_and_destructive_shapes() {
+        let path_feedback = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"C:\\Program Files\\nodejs\\npx.cmd --version"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(path_feedback.contains("quote Windows paths"));
+
+        let quoted_path_feedback = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"\"C:\\Program Files\\nodejs\\npx.cmd\" --version"}
+            })
+            .to_string(),
+        );
+        assert!(quoted_path_feedback.is_none());
+
+        let ampersand_feedback = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"cargo test & cargo build"}
+            })
+            .to_string(),
+        );
+        if cfg!(windows) {
+            assert!(ampersand_feedback
+                .as_deref()
+                .is_some_and(|feedback| feedback.contains("single '&'")));
+        } else {
+            assert!(ampersand_feedback.is_none());
+        }
+
+        let destructive_feedback = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"git reset --hard"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(destructive_feedback.contains("destructive-looking"));
+
+        let platform_command = if cfg!(windows) {
+            "export TOKEN=value"
+        } else {
+            "Get-ChildItem ."
+        };
+        let platform_feedback = guard_hook_context(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":platform_command}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(platform_feedback.contains("different shell/platform"));
+    }
+
+    #[test]
+    fn guard_hook_does_not_read_transcript_or_write_files() {
+        let dir = tempdir().unwrap();
+        let transcript = dir.path().join("transcript.jsonl");
+        let canary = "do-not-read-transcript-canary";
+        fs::write(&transcript, canary).unwrap();
+        let before = fs::read_dir(dir.path()).unwrap().count();
+        let created = dir.path().join("created-by-hook");
+        let output = guard_hook_output(
+            GuardHookEvent::PreToolUse,
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":format!("New-Item {}; rm -rf target", created.display())},
+                "transcript_path": transcript
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let after = fs::read_dir(dir.path()).unwrap().count();
+        assert_eq!(before, after);
+        assert!(!created.exists());
+        assert!(!output.contains(canary));
+    }
+
+    #[test]
+    fn guard_hook_packaging_stays_opt_in() {
+        let manifest: JsonValue =
+            serde_json::from_str(include_str!("../.codex-plugin/plugin.json")).unwrap();
+        assert!(manifest.get("hooks").is_none());
+        assert!(manifest.get("hook").is_none());
+
+        let docs = include_str!("../docs/v2-command-guard.md");
+        let readme = include_str!("../README.md");
+        let example = include_str!("../docs/examples/codex-command-guard-hooks.json");
+        assert!(docs.contains("docs/examples/codex-command-guard-hooks.json"));
+        assert!(readme.contains("docs/examples/codex-command-guard-hooks.json"));
+        assert!(example.contains("\"timeout\": 3"));
+        assert!(!Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("hooks")
+            .join("hooks.json")
+            .exists());
+    }
 
     #[test]
     fn duplicate_toml_table_key_is_invalid_toml() {
