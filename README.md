@@ -377,11 +377,12 @@ If you also want to remove the Codex MCP entry, delete this block from
 If you enabled command guard, remove the CDXCore PreToolUse entry from
 `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json`.
 
-## Developer Notes
+## For Contributors
 
-Normal users do not need Rust or this repo.
+You only need this section if you are working on CDXCore itself. Normal users
+should use the installers above.
 
-For local development:
+Local checks:
 
 ```powershell
 cargo build --release
@@ -389,18 +390,23 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-Current release artifacts:
+Release downloads:
 
-- Windows x64: `cdxcore-v0.1.3-x86_64-pc-windows-msvc.zip`
-- Linux x64: `cdxcore-v0.1.3-x86_64-unknown-linux-gnu.tar.gz`
-- macOS Apple Silicon: `cdxcore-v0.1.3-aarch64-apple-darwin.tar.gz`
+- Windows x64: `cdxcore-v0.1.4-x86_64-pc-windows-msvc.zip`
+- Linux x64: `cdxcore-v0.1.4-x86_64-unknown-linux-gnu.tar.gz`
+- macOS Apple Silicon: `cdxcore-v0.1.4-aarch64-apple-darwin.tar.gz`
 - Installers: `install.ps1`, `install.sh`
 
-Manual archives are published at:
+Latest release:
 
 ```text
-https://github.com/ikhdark/CDXCore/releases/tag/v0.1.3
+https://github.com/ikhdark/CDXCore/releases/latest
 ```
 
-Verify archive checksums against `SHA256SUMS.txt`. CDXCore binaries are not
-signed yet.
+Versioned release:
+
+```text
+https://github.com/ikhdark/CDXCore/releases/tag/v0.1.4
+```
+
+Verify downloads against `SHA256SUMS.txt`. CDXCore binaries are not signed yet.
