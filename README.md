@@ -75,13 +75,13 @@ when needed, and runs `cdxcore setup codex`.
 
 Current prebuilt artifacts:
 
-- Windows x64: `cdxcore-v0.1.3-x86_64-pc-windows-msvc.zip`
-- Linux x64: `cdxcore-v0.1.3-x86_64-unknown-linux-gnu.tar.gz`
-- macOS Apple Silicon: `cdxcore-v0.1.3-aarch64-apple-darwin.tar.gz`
+- Windows x64: `cdxcore-v0.1.4-x86_64-pc-windows-msvc.zip`
+- Linux x64: `cdxcore-v0.1.4-x86_64-unknown-linux-gnu.tar.gz`
+- macOS Apple Silicon: `cdxcore-v0.1.4-aarch64-apple-darwin.tar.gz`
 - Installers: `install.ps1`, `install.sh`
 
 Manual archive install remains available from
-`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.3`.
+`https://github.com/ikhdark/CDXCore/releases/tag/v0.1.4`.
 
 For manual installs, download the Windows ZIP or macOS/Linux tarball from the
 release page and verify its SHA256 checksum against `SHA256SUMS.txt` before
