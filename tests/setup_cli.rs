@@ -2,21 +2,21 @@ use std::env;
 use std::process::Command;
 use tempfile::tempdir;
 
-fn cdxcore_output(args: &[&str]) -> String {
-    let output = cdxcore_command(args).output().expect("run cdxcore");
+fn cdxmcpfix_output(args: &[&str]) -> String {
+    let output = cdxmcpfix_command(args).output().expect("run cdxmcpfix");
     assert!(output.status.success());
     String::from_utf8(output.stdout).expect("stdout utf8")
 }
 
-fn cdxcore_command(args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cdxcore"));
+fn cdxmcpfix_command(args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cdxmcpfix"));
     command.args(args);
     command
 }
 
 #[test]
 fn top_level_help_mentions_setup_and_mcp_server() {
-    let stdout = cdxcore_output(&["--help"]);
+    let stdout = cdxmcpfix_output(&["--help"]);
 
     assert!(stdout.contains("setup"));
     assert!(stdout.contains("mcp-server"));
@@ -25,10 +25,10 @@ fn top_level_help_mentions_setup_and_mcp_server() {
 
 #[test]
 fn setup_codex_help_mentions_mcp_default_only() {
-    let stdout = cdxcore_output(&["setup", "codex", "--help"]);
+    let stdout = cdxmcpfix_output(&["setup", "codex", "--help"]);
 
-    assert!(stdout.contains("cdxcore mcp-server"));
-    assert!(stdout.contains("Default setup installs only the CDXCore MCP server"));
+    assert!(stdout.contains("cdxmcpfix mcp-server"));
+    assert!(stdout.contains("Default setup installs only the CDXMCPFix MCP server"));
     assert!(!stdout.contains("--enable-command-guard"));
     assert!(!stdout.contains("--enable-retry-ledger"));
     assert!(!stdout.contains("--enable-command-repair"));
@@ -46,7 +46,7 @@ fn setup_codex_configures_mcp_server_without_hooks() {
     }
     let joined_path = env::join_paths(paths).unwrap();
 
-    let output = cdxcore_command(&["setup", "codex"])
+    let output = cdxmcpfix_command(&["setup", "codex"])
         .env("CODEX_HOME", codex_home.path())
         .env("PATH", joined_path)
         .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
@@ -59,7 +59,7 @@ fn setup_codex_configures_mcp_server_without_hooks() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Configured Codex MCP server `cdxcore`"));
+    assert!(stdout.contains("Configured Codex MCP server `cdxmcpfix`"));
     assert!(!codex_home.path().join("hooks.json").exists());
 }
 

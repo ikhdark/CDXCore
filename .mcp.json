@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "cdxcore": {
-      "command": "cdxcore",
+    "cdxmcpfix": {
+      "command": "cdxmcpfix",
       "args": [
         "mcp-server"
       ]

@@ -36,5 +36,5 @@ Cargo.toml.orig
 AGENTS.md
 
 
-# Upstream reference material only; do not publish/vendor into CDXCore.
+# Upstream reference material only; do not publish/vendor into CDXMCPFix.
 codex-rust-v0.141.0/

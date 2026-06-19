@@ -1,4 +1,4 @@
-use cdxcore::{run_cli, Cli};
+use cdxmcpfix::{run_cli, Cli};
 use clap::Parser;
 
 #[tokio::main]
@@ -7,7 +7,7 @@ async fn main() {
     let code = match run_cli(cli).await {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("cdxcore: {err:#}");
+            eprintln!("cdxmcpfix: {err:#}");
             4
         }
     };

@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${CDXCORE_VERSION:-v0.1.5}"
-INSTALL_DIR="${CDXCORE_INSTALL_DIR:-}"
-SKIP_CODEX_SETUP="${CDXCORE_SKIP_CODEX_SETUP:-0}"
-NO_PATH_UPDATE="${CDXCORE_NO_PATH_UPDATE:-0}"
+VERSION="${CDXMCPFIX_VERSION:-v0.1.5}"
+INSTALL_DIR="${CDXMCPFIX_INSTALL_DIR:-}"
+SKIP_CODEX_SETUP="${CDXMCPFIX_SKIP_CODEX_SETUP:-0}"
+NO_PATH_UPDATE="${CDXMCPFIX_NO_PATH_UPDATE:-0}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -83,7 +83,7 @@ case "$os:$arch" in
         target="aarch64-apple-darwin"
         ;;
     Darwin:x86_64|Darwin:amd64)
-        echo "macOS Intel is not published for this CDXCore release." >&2
+        echo "macOS Intel is not published for this CDXMCPFix release." >&2
         exit 2
         ;;
     *)
@@ -92,12 +92,12 @@ case "$os:$arch" in
         ;;
 esac
 
-repo="ikhdark/CDXCore"
-asset_name="cdxcore-$VERSION-$target.tar.gz"
+repo="ikhdark/CDXMCPFix"
+asset_name="cdxmcpfix-$VERSION-$target.tar.gz"
 release_base="https://github.com/$repo/releases/download/$VERSION"
 archive_url="$release_base/$asset_name"
 sums_url="$release_base/SHA256SUMS.txt"
-tmp_root="$(mktemp -d 2>/dev/null || mktemp -d -t cdxcore-install)"
+tmp_root="$(mktemp -d 2>/dev/null || mktemp -d -t cdxmcpfix-install)"
 archive_path="$tmp_root/$asset_name"
 sums_path="$tmp_root/SHA256SUMS.txt"
 extract_dir="$tmp_root/extract"
@@ -115,7 +115,7 @@ download() {
     elif command -v wget >/dev/null 2>&1; then
         wget -qO "$out" "$uri"
     else
-        echo "curl or wget is required to download CDXCore." >&2
+        echo "curl or wget is required to download CDXMCPFix." >&2
         exit 2
     fi
 }
@@ -127,7 +127,7 @@ sha256_file() {
     elif command -v shasum >/dev/null 2>&1; then
         shasum -a 256 "$path" | awk '{print $1}'
     else
-        echo "sha256sum or shasum is required to verify CDXCore." >&2
+        echo "sha256sum or shasum is required to verify CDXMCPFix." >&2
         exit 2
     fi
 }
@@ -160,7 +160,7 @@ add_path_to_profile() {
         return 0
     fi
     {
-        printf '\n# Added by CDXCore installer\n'
+        printf '\n# Added by CDXMCPFix installer\n'
         printf '%s' "$line"
     } >> "$profile"
     echo "Added $INSTALL_DIR to PATH in $profile"
@@ -184,8 +184,8 @@ fi
 
 tar -xzf "$archive_path" -C "$extract_dir"
 mkdir -p "$INSTALL_DIR"
-cp "$extract_dir/cdxcore" "$INSTALL_DIR/cdxcore"
-chmod 0755 "$INSTALL_DIR/cdxcore"
+cp "$extract_dir/cdxmcpfix" "$INSTALL_DIR/cdxmcpfix"
+chmod 0755 "$INSTALL_DIR/cdxmcpfix"
 [ -f "$extract_dir/README.md" ] && cp "$extract_dir/README.md" "$INSTALL_DIR/README.md"
 [ -f "$extract_dir/LICENSE" ] && cp "$extract_dir/LICENSE" "$INSTALL_DIR/LICENSE"
 if [ -d "$extract_dir/schemas" ]; then
@@ -203,13 +203,13 @@ case ":$PATH:" in
     *) PATH="$INSTALL_DIR:$PATH"; export PATH ;;
 esac
 
-"$INSTALL_DIR/cdxcore" --version
+"$INSTALL_DIR/cdxmcpfix" --version
 
 if [ "$SKIP_CODEX_SETUP" != "1" ]; then
-    if ! "$INSTALL_DIR/cdxcore" setup codex; then
-        echo "Warning: CDXCore was installed, but Codex setup did not complete. Run 'cdxcore setup codex' after Codex is available on PATH." >&2
+    if ! "$INSTALL_DIR/cdxmcpfix" setup codex; then
+        echo "Warning: CDXMCPFix was installed, but Codex setup did not complete. Run 'cdxmcpfix setup codex' after Codex is available on PATH." >&2
     fi
 fi
 
-echo "Installed CDXCore to $INSTALL_DIR"
+echo "Installed CDXMCPFix to $INSTALL_DIR"
 echo "Open a new terminal or restart Codex if it does not see the updated PATH."

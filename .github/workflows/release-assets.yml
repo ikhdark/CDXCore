@@ -22,18 +22,18 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
-            bin: cdxcore
-            installed_bin: cdxcore
+            bin: cdxmcpfix
+            installed_bin: cdxmcpfix
           - os: macos-14
             target: aarch64-apple-darwin
             archive: tar.gz
-            bin: cdxcore
-            installed_bin: cdxcore
+            bin: cdxmcpfix
+            installed_bin: cdxmcpfix
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
-            bin: cdxcore.exe
-            installed_bin: cdxcore.exe
+            bin: cdxmcpfix.exe
+            installed_bin: cdxmcpfix.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          asset_base="cdxcore-${{ inputs.tag }}-${{ matrix.target }}"
+          asset_base="cdxmcpfix-${{ inputs.tag }}-${{ matrix.target }}"
           stage="$RUNNER_TEMP/$asset_base"
           mkdir -p "$stage"
           cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$stage/${{ matrix.installed_bin }}"
@@ -96,7 +96,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $assetBase = "cdxcore-${{ inputs.tag }}-${{ matrix.target }}"
+          $assetBase = "cdxmcpfix-${{ inputs.tag }}-${{ matrix.target }}"
           $stage = Join-Path $env:RUNNER_TEMP $assetBase
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item -LiteralPath "target\${{ matrix.target }}\release\${{ matrix.bin }}" -Destination (Join-Path $stage '${{ matrix.installed_bin }}') -Force
@@ -111,8 +111,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cdxcore-${{ matrix.target }}
-          path: cdxcore-${{ inputs.tag }}-${{ matrix.target }}.${{ matrix.archive }}
+          name: cdxmcpfix-${{ matrix.target }}
+          path: cdxmcpfix-${{ inputs.tag }}-${{ matrix.target }}.${{ matrix.archive }}
           if-no-files-found: error
 
   publish:
@@ -143,24 +143,39 @@ jobs:
           cp scripts/install.sh dist/install.sh
           chmod 0755 dist/install.sh
           cd dist
-          sha256sum cdxcore-* install.ps1 install.sh > SHA256SUMS.txt
+          sha256sum cdxmcpfix-* install.ps1 install.sh > SHA256SUMS.txt
 
       - name: Create release if needed
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "CDXMCPFix $TAG" \
+              --notes "CDXMCPFix $TAG release assets."
+          else
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "CDXCore $TAG" \
-              --notes "CDXCore $TAG release assets."
+              --title "CDXMCPFix $TAG" \
+              --notes "CDXMCPFix $TAG release assets."
           fi
 
       - name: Upload release assets
         shell: bash
         run: |
           set -euo pipefail
-          gh release upload "$TAG" dist/cdxcore-* dist/SHA256SUMS.txt dist/install.ps1 dist/install.sh \
+          while IFS= read -r asset; do
+            [ -n "$asset" ] || continue
+            gh release delete-asset "$TAG" "$asset" \
+              --repo "$GITHUB_REPOSITORY" \
+              --yes
+          done < <(gh release view "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name | select(startswith("cdxcore-"))')
+
+          gh release upload "$TAG" dist/cdxmcpfix-* dist/SHA256SUMS.txt dist/install.ps1 dist/install.sh \
             --repo "$GITHUB_REPOSITORY" \
             --clobber

@@ -1,11 +1,11 @@
 [package]
-name = "cdxcore"
+name = "cdxmcpfix"
 version = "0.1.5"
 edition = "2021"
 description = "Read-only MCP startup and configuration diagnostics for Codex."
 license = "MIT"
-repository = "https://github.com/ikhdark/CDXCore"
-homepage = "https://github.com/ikhdark/CDXCore"
+repository = "https://github.com/ikhdark/CDXMCPFix"
+homepage = "https://github.com/ikhdark/CDXMCPFix"
 readme = "README.md"
 include = [
     "/Cargo.lock",
@@ -24,7 +24,7 @@ include = [
 ]
 
 [[bin]]
-name = "cdxcore"
+name = "cdxmcpfix"
 path = "src/main.rs"
 
 [dependencies]

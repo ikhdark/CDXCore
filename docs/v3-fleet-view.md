@@ -1,6 +1,6 @@
-# CDXCore v3 — Cross-Client Read-Only Fleet View (Deferred Design Note)
+# CDXMCPFix v3 — Cross-Client Read-Only Fleet View (Deferred Design Note)
 
-> **Status: DEFERRED DESIGN NOTE — NOT PART OF THE CDXCore v1 MVP.**
+> **Status: DEFERRED DESIGN NOTE — NOT PART OF THE CDXMCPFix v1 MVP.**
 > This document records design decisions for a *future* v3 capability. Nothing
 > here is implemented in v1. v1 ships no fleet-scan code, no new CLI commands, no
 > additional config readers, no tests, no plugin config, and no implementation
@@ -8,7 +8,7 @@
 
 ## v1 scope (unchanged)
 
-CDXCore v1 is a **Codex-only, strictly read-only MCP startup/config profiler**.
+CDXMCPFix v1 is a **Codex-only, strictly read-only MCP startup/config profiler**.
 v3 does not change v1. No v3 behavior ships in the MVP.
 
 ## v3 name
@@ -49,10 +49,10 @@ or control line. (Command Guard now lives in the separate CDXCoreGuard tool and 
 
 This distinction is load-bearing and mirrors v1's own static-vs-profile split:
 
-- **`cdxcore scan`** — performs **static config / provenance diagnostics only**.
+- **`cdxmcpfix scan`** — performs **static config / provenance diagnostics only**.
   It reads config files and reasons about them. It does **not** launch any
   configured MCP server.
-- **`cdxcore scan --profile`** — may **explicitly launch and profile configured
+- **`cdxmcpfix scan --profile`** — may **explicitly launch and profile configured
   stdio MCP servers** for startup/handshake timing, under the same read-only
   profiling rules as v1 (short timeouts, `initialize` + bounded `tools/list`
   only, no arbitrary tool calls, guaranteed child-process termination).

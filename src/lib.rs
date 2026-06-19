@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::time::{timeout, Duration};
 
-pub const SCHEMA_VERSION: &str = "cdxcore.diagnostics.v1";
+pub const SCHEMA_VERSION: &str = "cdxmcpfix.diagnostics.v1";
 const EXIT_SUCCESSFULLY_WORKING: i32 = 0;
 const EXIT_WORKING_NEEDS_REVIEW: i32 = 1;
 const EXIT_COMPLETELY_UNWIRED: i32 = 2;
@@ -39,7 +39,7 @@ const SECRET_TERMS: &[&str] = &[
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "cdxcore",
+    name = "cdxmcpfix",
     version,
     about = "Codex MCP diagnostics and startup profiler"
 )]
@@ -92,7 +92,7 @@ pub enum CliCommand {
         about = "Run the MCP server entrypoint used by Codex"
     )]
     Serve,
-    #[command(about = "Configure CDXCore for an MCP client")]
+    #[command(about = "Configure CDXMCPFix for an MCP client")]
     Setup {
         #[command(subcommand)]
         command: SetupCommand,
@@ -102,8 +102,8 @@ pub enum CliCommand {
 #[derive(Subcommand, Debug)]
 pub enum SetupCommand {
     #[command(
-        about = "Configure Codex to launch `cdxcore mcp-server`",
-        after_help = "Default setup installs only the CDXCore MCP server."
+        about = "Configure Codex to launch `cdxmcpfix mcp-server`",
+        after_help = "Default setup installs only the CDXMCPFix MCP server."
     )]
     Codex,
 }
@@ -341,11 +341,11 @@ async fn run_setup(command: SetupCommand) -> Result<i32> {
 async fn run_setup_codex() -> Result<i32> {
     match run_codex_mcp_add().await {
         Ok(()) => {
-            println!("Configured Codex MCP server `cdxcore`.");
-            println!("Codex will launch: cdxcore mcp-server");
+            println!("Configured Codex MCP server `cdxmcpfix`.");
+            println!("Codex will launch: cdxmcpfix mcp-server");
         }
         Err(err) => {
-            eprintln!("Could not run `codex mcp add cdxcore -- cdxcore mcp-server`: {err}");
+            eprintln!("Could not run `codex mcp add cdxmcpfix -- cdxmcpfix mcp-server`: {err}");
             print_codex_manual_mcp_fallback();
             return Ok(1);
         }
@@ -356,7 +356,7 @@ async fn run_setup_codex() -> Result<i32> {
 
 async fn run_codex_mcp_add() -> Result<()> {
     let output = Command::new("codex")
-        .args(["mcp", "add", "cdxcore", "--", "cdxcore", "mcp-server"])
+        .args(["mcp", "add", "cdxmcpfix", "--", "cdxmcpfix", "mcp-server"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -378,9 +378,9 @@ async fn run_codex_mcp_add() -> Result<()> {
 
 fn print_codex_manual_mcp_fallback() {
     eprintln!("Manual fallback: add this to ~/.codex/config.toml or $CODEX_HOME/config.toml:");
-    eprintln!("[mcp_servers.cdxcore]");
+    eprintln!("[mcp_servers.cdxmcpfix]");
     eprintln!("startup_timeout_sec = 15");
-    eprintln!("command = \"cdxcore\"");
+    eprintln!("command = \"cdxmcpfix\"");
     eprintln!("args = [\"mcp-server\"]");
 }
 
@@ -509,7 +509,7 @@ fn write_output(envelope: &DiagnosticEnvelope, json_output: bool) -> Result<()> 
     }
 
     if envelope.servers.is_empty() {
-        println!("CDXCore: no MCP servers discovered");
+        println!("CDXMCPFix: no MCP servers discovered");
     }
     if envelope.config_error_blocks_enumeration {
         println!("Health: completely unwired");
@@ -565,11 +565,11 @@ fn status_health_label(status: Status) -> &'static str {
 
 fn status_meaning(status: Status) -> &'static str {
     match status {
-        Status::Pass => "CDXCore completed this check and found no diagnostic concerns.",
+        Status::Pass => "CDXMCPFix completed this check and found no diagnostic concerns.",
         Status::Warn => {
-            "CDXCore could inspect this server or config, but found something that needs review."
+            "CDXMCPFix could inspect this server or config, but found something that needs review."
         }
-        Status::Fail => "CDXCore could not prove this server is wired and working.",
+        Status::Fail => "CDXMCPFix could not prove this server is wired and working.",
     }
 }
 
@@ -586,7 +586,7 @@ fn status_action(status: Status) -> &'static str {
 }
 
 fn config_blocked_meaning() -> &'static str {
-    "CDXCore could not read or parse enough config to enumerate MCP servers."
+    "CDXMCPFix could not read or parse enough config to enumerate MCP servers."
 }
 
 fn config_blocked_action() -> &'static str {
@@ -1307,7 +1307,8 @@ fn missing_server_report(name: &str) -> ServerReport {
                 .to_string(),
         ),
         suggested_fix: Some(
-            "run cdxcore scan --json and verify the server name and source provenance".to_string(),
+            "run cdxmcpfix scan --json and verify the server name and source provenance"
+                .to_string(),
         ),
         safe_config_snippet: None,
         risk: Some(
@@ -1378,7 +1379,7 @@ fn apply_static_diagnostics(report: &mut ServerReport, server: &ServerConfig) {
                 );
                 if system_resolution.is_some() {
                     report.fail(format!(
-                        "{command_for_report} resolves outside client PATH but not in CDXCore client_path"
+                        "{command_for_report} resolves outside client PATH but not in CDXMCPFix client_path"
                     ));
                     report.set_cause_if_empty(format!(
                         "{command_for_report} not found from GUI/client PATH"
@@ -1552,10 +1553,10 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
         return;
     };
     if resolves_to_self(command, server).unwrap_or(false) {
-        report.warn("self-profiling recursion guard skipped launching CDXCore itself");
-        report.set_cause_if_empty("configured server resolves to the cdxcore binary");
+        report.warn("self-profiling recursion guard skipped launching CDXMCPFix itself");
+        report.set_cause_if_empty("configured server resolves to the cdxmcpfix binary");
         report.set_fix_if_empty(
-            "do not profile CDXCore from CDXCore; validate the plugin entry from the Codex client",
+            "do not profile CDXMCPFix from CDXMCPFix; validate the plugin entry from the Codex client",
         );
         return;
     }
@@ -1616,7 +1617,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
                 )),
                 Ok(Some(AsyncBoundedLine::Exceeded)) => Some((
                     stderr_start.elapsed().as_millis(),
-                    "stderr line exceeded CDXCore byte limit; content omitted".to_string(),
+                    "stderr line exceeded CDXMCPFix byte limit; content omitted".to_string(),
                 )),
                 _ => None,
             }
@@ -1633,7 +1634,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
             "protocolVersion": "2025-06-18",
             "capabilities": {},
             "clientInfo": {
-                "name": "cdxcore",
+                "name": "cdxmcpfix",
                 "version": env!("CARGO_PKG_VERSION")
             }
         }
@@ -1776,7 +1777,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
         }
     }
     if cursor.is_some() && seen_cursors.len() >= MAX_TOOL_PAGES {
-        report.fail("tools/list pagination exceeded CDXCore page limit");
+        report.fail("tools/list pagination exceeded CDXMCPFix page limit");
         report.set_cause_if_empty(
             "tools/list pagination did not terminate within the bounded profiler",
         );
@@ -1844,7 +1845,9 @@ async fn read_response(
             *first_stdout_ms = Some(start.elapsed().as_millis());
         }
         let AsyncBoundedLine::Line(line) = line else {
-            return Err("MCP stdout line exceeded CDXCore byte limit; content omitted".to_string());
+            return Err(
+                "MCP stdout line exceeded CDXMCPFix byte limit; content omitted".to_string(),
+            );
         };
         let value: JsonValue = serde_json::from_slice(&line)
             .map_err(|_| "non-JSON stdout before MCP response".to_string())?;
@@ -2063,7 +2066,7 @@ fn canonicalize_lossy(path: &Path) -> PathBuf {
 }
 
 fn is_standalone_terminal_run() -> bool {
-    env::var_os("CDXCORE_UNDER_CODEX_MCP").is_none()
+    env::var_os("CDXMCPFIX_UNDER_CODEX_MCP").is_none()
 }
 
 fn fingerprint_for(server: &ServerConfig, args_redacted: &[String], env_keys: &[String]) -> String {
@@ -2669,7 +2672,7 @@ fn looks_secretish_value(input: &str) -> bool {
 }
 
 async fn run_mcp_stdio_server() -> Result<()> {
-    env::set_var("CDXCORE_UNDER_CODEX_MCP", "1");
+    env::set_var("CDXMCPFIX_UNDER_CODEX_MCP", "1");
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
     let mut lines = BufReader::new(stdin);
@@ -2695,7 +2698,7 @@ async fn run_mcp_stdio_server() -> Result<()> {
                     "protocolVersion": "2025-06-18",
                     "capabilities": mcp_capabilities_json(),
                     "serverInfo": {
-                        "name": "CDXCore",
+                        "name": "CDXMCPFix",
                         "version": env!("CARGO_PKG_VERSION")
                     }
                 }
@@ -3114,7 +3117,7 @@ env = {{ TOKEN = "{marker}"
             transport: TransportKind::Stdio,
             command: Some("missing-cmd".to_string()),
             args: Vec::new(),
-            cwd: Some("definitely-missing-cdxcore-dir".to_string()),
+            cwd: Some("definitely-missing-cdxmcpfix-dir".to_string()),
             env_literals: BTreeMap::new(),
             env_vars: Vec::new(),
             http_headers: BTreeMap::new(),
@@ -3313,7 +3316,7 @@ for line in sys.stdin:
         profile_server(&mut report, &server).await;
         let evidence = report.evidence.join(" | ");
 
-        assert!(evidence.contains("stderr line exceeded CDXCore byte limit"));
+        assert!(evidence.contains("stderr line exceeded CDXMCPFix byte limit"));
         assert!(evidence.len() < 1_000);
     }
 
@@ -3342,7 +3345,7 @@ for line in sys.stdin:
         let evidence = report.evidence.join(" | ");
 
         assert_eq!(report.status, Status::Fail);
-        assert!(evidence.contains("MCP stdout line exceeded CDXCore byte limit"));
+        assert!(evidence.contains("MCP stdout line exceeded CDXMCPFix byte limit"));
         assert!(evidence.len() < 1_000);
     }
 
@@ -3548,7 +3551,7 @@ for line in sys.stdin:
     fn secretish_server_names_are_redacted_from_reports_and_snippets() {
         let marker = ["sk", "-SERVERNAMELEAK1234567890abcdef"].join("");
         let mut server = minimal_test_server(&marker, TransportKind::Stdio);
-        server.command = Some("missing-cdxcore-test-command".to_string());
+        server.command = Some("missing-cdxmcpfix-test-command".to_string());
 
         let mut report = static_report_for(&server);
         apply_static_diagnostics(&mut report, &server);
@@ -3641,7 +3644,7 @@ for line in sys.stdin:
         envelope.recompute_status();
 
         let schema: JsonValue = serde_json::from_str(include_str!(
-            "../schemas/cdxcore.diagnostics.v1.schema.json"
+            "../schemas/cdxmcpfix.diagnostics.v1.schema.json"
         ))
         .unwrap();
         let output = serde_json::to_value(&envelope).unwrap();
@@ -3759,7 +3762,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn disabled_server_skips_static_failures_and_profile() {
         let mut server = minimal_test_server("disabled", TransportKind::Stdio);
-        server.command = Some("missing-cdxcore-fixture-command".to_string());
+        server.command = Some("missing-cdxmcpfix-fixture-command".to_string());
         server.enabled = false;
         server.effective = false;
 
@@ -3846,7 +3849,7 @@ client_id = "client-id-literal"
     fn http_static_validation_includes_env_and_header_checks() {
         let mut server = minimal_test_server("web", TransportKind::Http);
         server.url = Some("https://example.test/mcp".to_string());
-        server.token_env_vars = vec!["MISSING_CDXCORE_REVIEW_TOKEN".to_string()];
+        server.token_env_vars = vec!["MISSING_CDXMCPFIX_REVIEW_TOKEN".to_string()];
         server.http_headers.insert(
             "Authorization".to_string(),
             "Bearer literal-token-fixture".to_string(),
@@ -3858,7 +3861,7 @@ client_id = "client-id-literal"
 
         assert_eq!(report.status, Status::Warn);
         assert!(evidence.contains("static validation only"));
-        assert!(evidence.contains("MISSING_CDXCORE_REVIEW_TOKEN"));
+        assert!(evidence.contains("MISSING_CDXMCPFIX_REVIEW_TOKEN"));
         assert!(evidence.contains("HTTP header Authorization"));
     }
 
