@@ -11,7 +11,7 @@ use. Install the `cdxcore` CLI, then run `cdxcore setup codex`.
 ## Features
 
 - Read-only Codex MCP config inspection and startup profiling.
-- Serena-style setup: install the `cdxcore` CLI, then let Codex launch
+- Install the `cdxcore` CLI, then let Codex launch
   `cdxcore serve`.
 - Optional v2a command guard hooks are visible but inactive by default; they are
   feedback-only and never block or rewrite commands.
