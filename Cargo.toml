@@ -1,6 +1,6 @@
 [package]
 name = "cdxmcpfix"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "Read-only MCP startup and configuration diagnostics for Codex."
 license = "MIT"

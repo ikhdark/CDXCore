@@ -47,7 +47,7 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Print JSON instead of text for scan, fixes, and check"
+        help = "Print JSON instead of text for scan and fixes"
     )]
     pub json: bool,
     #[command(subcommand)]
@@ -58,30 +58,15 @@ pub struct Cli {
 pub enum CliCommand {
     #[command(
         name = "scan",
-        alias = "inspect-config",
-        about = "Review Codex MCP config without launching servers"
+        about = "Review Codex MCP config and check startup health"
     )]
-    InspectConfig,
-    #[command(
-        name = "fixes",
-        alias = "suggest-fixes",
-        about = "Show likely config and startup fixes"
-    )]
-    SuggestFixes,
-    #[command(
-        name = "check",
-        alias = "validate",
-        about = "Check configured local MCP servers and report health"
-    )]
-    Validate {
+    Scan {
         #[arg(value_name = "SERVER")]
         server: Option<String>,
     },
-    #[command(
-        name = "mcp-server",
-        alias = "serve",
-        about = "Run the MCP server that Codex launches"
-    )]
+    #[command(name = "fixes", about = "Show likely config and startup fixes")]
+    SuggestFixes,
+    #[command(name = "mcp-server", about = "Run the MCP server that Codex launches")]
     Serve,
     #[command(about = "Configure CDXMCPFix for an MCP client")]
     Setup {
@@ -303,12 +288,7 @@ pub async fn run_cli(cli: Cli) -> Result<i32> {
             run_mcp_stdio_server().await?;
             Ok(0)
         }
-        CliCommand::InspectConfig => {
-            let envelope = build_diagnostics(RunMode::StaticAll).await?;
-            write_output(&envelope, cli.json)?;
-            Ok(exit_for(&envelope))
-        }
-        CliCommand::Validate { server } => {
+        CliCommand::Scan { server } => {
             let mode = server.map_or(RunMode::ProfileAll, RunMode::ProfileOne);
             let envelope = build_diagnostics(mode).await?;
             write_output(&envelope, cli.json)?;
@@ -335,9 +315,23 @@ async fn run_setup_codex() -> Result<i32> {
             println!("Codex will launch: cdxmcpfix mcp-server");
         }
         Err(err) => {
-            eprintln!("Could not run `codex mcp add cdxmcpfix -- cdxmcpfix mcp-server`: {err}");
-            print_codex_manual_mcp_fallback();
-            return Ok(1);
+            println!(
+                "Codex CLI could not be launched, so setup will update Codex config directly: {err}"
+            );
+            match write_codex_mcp_config_entry() {
+                Ok(path) => {
+                    println!(
+                        "Configured Codex MCP server `cdxmcpfix` in {}.",
+                        display_path(&path)
+                    );
+                    println!("Codex will launch: cdxmcpfix mcp-server");
+                }
+                Err(fallback_err) => {
+                    eprintln!("Could not update Codex config directly: {fallback_err:#}");
+                    print_codex_manual_mcp_fallback();
+                    return Ok(1);
+                }
+            }
         }
     }
 
@@ -372,6 +366,102 @@ fn print_codex_manual_mcp_fallback() {
     eprintln!("startup_timeout_sec = 15");
     eprintln!("command = \"cdxmcpfix\"");
     eprintln!("args = [\"mcp-server\"]");
+}
+
+fn write_codex_mcp_config_entry() -> Result<PathBuf> {
+    let path = codex_user_config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create config directory {}", display_path(parent)))?;
+    }
+    let existing = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err).with_context(|| format!("read {}", display_path(&path))),
+    };
+    let updated = upsert_cdxmcpfix_mcp_entry(&existing)
+        .with_context(|| format!("prepare {}", display_path(&path)))?;
+    fs::write(&path, updated).with_context(|| format!("write {}", display_path(&path)))?;
+    Ok(path)
+}
+
+fn upsert_cdxmcpfix_mcp_entry(existing: &str) -> Result<String> {
+    let trimmed = existing.trim();
+    let has_existing_entry = if trimmed.is_empty() {
+        false
+    } else {
+        let value: toml::Value =
+            toml::from_str(existing).context("parse existing Codex config TOML")?;
+        value
+            .get("mcp_servers")
+            .and_then(toml::Value::as_table)
+            .and_then(|servers| servers.get("cdxmcpfix"))
+            .is_some()
+    };
+
+    let (without_old_entry, removed_table) = remove_cdxmcpfix_mcp_table(existing);
+    if has_existing_entry && !removed_table {
+        return Err(anyhow!(
+            "existing mcp_servers.cdxmcpfix entry is not a standalone TOML table"
+        ));
+    }
+
+    let newline = preferred_newline(existing);
+    let mut output = without_old_entry.trim_end().to_string();
+    if !output.is_empty() {
+        output.push_str(newline);
+        output.push_str(newline);
+    }
+    output.push_str(&cdxmcpfix_mcp_config_block(newline));
+    Ok(output)
+}
+
+fn remove_cdxmcpfix_mcp_table(existing: &str) -> (String, bool) {
+    let newline = preferred_newline(existing);
+    let mut kept = Vec::new();
+    let mut skipping = false;
+    let mut removed = false;
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if is_cdxmcpfix_mcp_table_header(trimmed) {
+            skipping = true;
+            removed = true;
+            continue;
+        }
+        if skipping && trimmed.starts_with('[') {
+            skipping = false;
+        }
+        if !skipping {
+            kept.push(line);
+        }
+    }
+    (kept.join(newline), removed)
+}
+
+fn is_cdxmcpfix_mcp_table_header(trimmed_line: &str) -> bool {
+    trimmed_line == "[mcp_servers.cdxmcpfix]"
+        || trimmed_line
+            .strip_prefix("[mcp_servers.cdxmcpfix.")
+            .is_some_and(|rest| rest.ends_with(']'))
+}
+
+fn cdxmcpfix_mcp_config_block(newline: &str) -> String {
+    [
+        "[mcp_servers.cdxmcpfix]",
+        "startup_timeout_sec = 15",
+        "command = \"cdxmcpfix\"",
+        "args = [\"mcp-server\"]",
+        "",
+    ]
+    .join(newline)
+}
+
+fn preferred_newline(text: &str) -> &'static str {
+    if text.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
 }
 
 fn codex_home_path() -> PathBuf {
@@ -570,7 +660,7 @@ fn status_action(status: Status) -> &'static str {
             "Review Cause, Evidence, and Suggested fix; confirm anything CDXMCPFix could not check directly from Codex."
         }
         Status::Fail => {
-            "Treat this server as unavailable until the reported command, folder, PATH, environment, connection type, or startup issue is fixed; then rerun check."
+            "Treat this server as unavailable until the reported command, folder, PATH, environment, connection type, or startup issue is fixed; then rerun scan."
         }
     }
 }
@@ -1303,7 +1393,7 @@ fn missing_server_report(name: &str) -> ServerReport {
                 .to_string(),
         ),
         safe_config_snippet: None,
-        risk: Some("check could not run because there is no server config to launch".to_string()),
+        risk: Some("scan could not run because there is no server config to launch".to_string()),
         managed: false,
         effective: false,
         overwritten_by: None,
@@ -2847,7 +2937,7 @@ mod tests {
         );
         assert_eq!(status_health_label(Status::Fail), "not working");
         assert!(status_meaning(Status::Warn).contains("needs review"));
-        assert!(status_action(Status::Fail).contains("rerun check"));
+        assert!(status_action(Status::Fail).contains("rerun scan"));
         assert!(!status_action(Status::Fail).contains("doctor"));
         assert!(config_blocked_action().contains("rerun scan"));
     }
@@ -2879,6 +2969,36 @@ mod tests {
             report.suggested_fix.as_deref(),
             Some("check server error output and verify it speaks MCP over standard input/output")
         );
+    }
+
+    #[test]
+    fn setup_upserts_cdxmcpfix_config_block() {
+        let updated = upsert_cdxmcpfix_mcp_entry(
+            r#"
+[mcp_servers.old]
+command = "old"
+
+[mcp_servers.cdxmcpfix]
+command = "wrong"
+args = ["wrong"]
+
+[mcp_servers.cdxmcpfix.env]
+OLD = "wrong"
+
+[profiles.demo]
+model = "gpt-5"
+"#,
+        )
+        .unwrap();
+
+        assert!(updated.contains("[mcp_servers.old]"));
+        assert!(updated.contains("[profiles.demo]"));
+        assert!(updated.contains("[mcp_servers.cdxmcpfix]"));
+        assert!(updated.contains("startup_timeout_sec = 15"));
+        assert!(updated.contains("command = \"cdxmcpfix\""));
+        assert!(updated.contains("args = [\"mcp-server\"]"));
+        assert!(!updated.contains("command = \"wrong\""));
+        assert!(!updated.contains("OLD = \"wrong\""));
     }
 
     #[test]

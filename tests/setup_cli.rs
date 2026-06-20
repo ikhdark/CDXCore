@@ -19,8 +19,9 @@ fn top_level_help_mentions_setup_and_mcp_server() {
     let stdout = cdxmcpfix_output(&["--help"]);
 
     assert!(stdout.contains("setup"));
-    assert!(stdout.contains("check"));
+    assert!(stdout.contains("scan"));
     assert!(stdout.contains("mcp-server"));
+    assert!(!stdout.contains("\n  check"));
     assert!(!stdout.contains("doctor"));
     assert!(!stdout.contains("explain"));
     assert!(!stdout.contains("guard-hook"));
@@ -35,6 +36,25 @@ fn setup_codex_help_mentions_mcp_default_only() {
     assert!(!stdout.contains("--enable-command-guard"));
     assert!(!stdout.contains("--enable-retry-ledger"));
     assert!(!stdout.contains("--enable-command-repair"));
+}
+
+#[test]
+fn legacy_command_aliases_are_removed() {
+    for alias in [
+        "check",
+        "inspect-config",
+        "suggest-fixes",
+        "validate",
+        "serve",
+    ] {
+        let output = cdxmcpfix_command(&[alias]).output().expect("run cdxmcpfix");
+        assert!(
+            !output.status.success(),
+            "legacy alias {alias} unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("unrecognized subcommand"));
+    }
 }
 
 #[test]
@@ -63,6 +83,34 @@ fn setup_codex_configures_mcp_server_without_hooks() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Configured Codex MCP server `cdxmcpfix`"));
+    assert!(!codex_home.path().join("hooks.json").exists());
+}
+
+#[test]
+fn setup_codex_writes_config_when_codex_cli_cannot_launch() {
+    let empty_bin = tempdir().unwrap();
+    let codex_home = tempdir().unwrap();
+
+    let output = cdxmcpfix_command(&["setup", "codex"])
+        .env("CODEX_HOME", codex_home.path())
+        .env("PATH", empty_bin.path())
+        .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        .output()
+        .expect("run setup codex");
+
+    assert!(
+        output.status.success(),
+        "setup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Codex CLI could not be launched"));
+    assert!(stdout.contains("Configured Codex MCP server `cdxmcpfix` in"));
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+    assert!(config.contains("[mcp_servers.cdxmcpfix]"));
+    assert!(config.contains("startup_timeout_sec = 15"));
+    assert!(config.contains("command = \"cdxmcpfix\""));
+    assert!(config.contains("args = [\"mcp-server\"]"));
     assert!(!codex_home.path().join("hooks.json").exists());
 }
 

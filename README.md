@@ -53,6 +53,9 @@ command = "cdxmcpfix"
 args = ["mcp-server"]
 ```
 
+If the separate `codex` CLI cannot be launched, `cdxmcpfix setup codex` writes
+that block directly to your Codex config instead.
+
 Restart Codex after install so the app sees the updated PATH.
 
 ## What You Run
@@ -60,14 +63,14 @@ Restart Codex after install so the app sees the updated PATH.
 Most of the time, start here:
 
 ```powershell
-cdxmcpfix check
+cdxmcpfix scan
 ```
 
 That reviews your Codex MCP config and briefly starts each configured
 command-based MCP server to time startup. It stops child processes after each
-check.
+scan.
 
-Use `cdxmcpfix check <server>` for the same config review plus startup check
+Use `cdxmcpfix scan <server>` for the same config review plus startup check
 focused on one server.
 
 Example report:
@@ -77,7 +80,7 @@ Server: notion
 Status: fail (not working)
 Meaning: CDXMCPFix could not confirm this server starts and responds.
 What to do: Treat this server as unavailable until the reported command, folder,
-PATH, environment, connection type, or startup issue is fixed; then rerun check.
+PATH, environment, connection type, or startup issue is fixed; then rerun scan.
 Cause: npx not found from Codex PATH
 Evidence: command failed before MCP initialize
 Suggested fix: use an absolute Node/npm path or add PATH in the MCP env block
@@ -89,19 +92,15 @@ Suggested command order:
 
 ```powershell
 cdxmcpfix scan
-cdxmcpfix check
 cdxmcpfix fixes
-cdxmcpfix check <server>
+cdxmcpfix scan <server>
 cdxmcpfix mcp-server
 ```
-
-Older names remain available as aliases: `inspect-config`, `suggest-fixes`,
-`validate`, and `serve`.
 
 Add `--json` when you want JSON output:
 
 ```powershell
-cdxmcpfix check --json
+cdxmcpfix scan --json
 ```
 
 The JSON schema is `cdxmcpfix.diagnostics.v1` and lives at
@@ -109,16 +108,16 @@ The JSON schema is `cdxmcpfix.diagnostics.v1` and lives at
 
 Exit codes:
 
-- `0`: working; the check completed with `pass`
-- `1`: working but needs review; the check completed with `warn`
-- `2`: not working; the check completed with `fail`, or config could not be
+- `0`: working; the scan completed with `pass`
+- `1`: working but needs review; the scan completed with `warn`
+- `2`: not working; the scan completed with `fail`, or config could not be
   read or parsed enough to list servers
 
 CLI parser errors and unexpected internal CDXMCPFix errors are not health results.
 
 Health meanings:
 
-- `pass` / exit `0` means CDXMCPFix completed the requested check and found no
+- `pass` / exit `0` means CDXMCPFix completed the requested scan and found no
   problems. No action is required.
 - `warn` / exit `1` means the server or config appears reachable enough to
   inspect, but CDXMCPFix found something that needs review. Read `Cause`,
@@ -128,7 +127,7 @@ Health meanings:
 - `fail` / exit `2` means CDXMCPFix could not confirm the server starts and
   responds. Treat the server as unavailable until the reported command, working
   directory, PATH, environment, connection type, or startup problem is fixed,
-  then rerun `cdxmcpfix check <server>` or `cdxmcpfix check`.
+  then rerun `cdxmcpfix scan <server>` or `cdxmcpfix scan`.
 - Config blocked / exit `2` means CDXMCPFix could not read enough config to list
   servers. Fix the reported TOML/JSON/path problem first, then run
   `cdxmcpfix scan` before checking individual servers.
@@ -194,8 +193,8 @@ Suggested config snippets use placeholders such as `${TOKEN_ENV_VAR}` or
 
 ## Read-Only Promise
 
-The check commands and MCP tools do not edit your MCP configs, delete state,
-reset state, or call arbitrary MCP tools.
+The scan command and MCP tools do not edit your MCP configs, delete state, reset
+state, or call arbitrary MCP tools.
 
 The only command that writes Codex config is:
 
@@ -206,7 +205,7 @@ cdxmcpfix setup codex
 That setup command is explicit. It installs only the CDXMCPFix MCP entry.
 
 CDXMCPFix launches configured command-based MCP servers only when you run
-`check`, `check <server>`, or the matching MCP tool.
+`scan`, `scan <server>`, or the matching MCP tool.
 
 ## If PATH Is Weird
 
@@ -291,9 +290,9 @@ bash -n scripts/install.sh
 
 Release downloads:
 
-- Windows x64: `cdxmcpfix-v0.1.5-x86_64-pc-windows-msvc.zip`
-- Linux x64: `cdxmcpfix-v0.1.5-x86_64-unknown-linux-gnu.tar.gz`
-- macOS Apple Silicon: `cdxmcpfix-v0.1.5-aarch64-apple-darwin.tar.gz`
+- Windows x64: `cdxmcpfix-v0.1.6-x86_64-pc-windows-msvc.zip`
+- Linux x64: `cdxmcpfix-v0.1.6-x86_64-unknown-linux-gnu.tar.gz`
+- macOS Apple Silicon: `cdxmcpfix-v0.1.6-aarch64-apple-darwin.tar.gz`
 - Installers: `install.ps1`, `install.sh`
 
 Latest release:
@@ -305,7 +304,7 @@ https://github.com/ikhdark/CDXMCPFix/releases/latest
 Versioned release:
 
 ```text
-https://github.com/ikhdark/CDXMCPFix/releases/tag/v0.1.5
+https://github.com/ikhdark/CDXMCPFix/releases/tag/v0.1.6
 ```
 
 Verify downloads against `SHA256SUMS.txt`. CDXMCPFix binaries are not signed yet.
