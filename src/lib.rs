@@ -41,13 +41,13 @@ const SECRET_TERMS: &[&str] = &[
 #[command(
     name = "cdxmcpfix",
     version,
-    about = "Codex MCP diagnostics and startup profiler"
+    about = "Find Codex MCP config and startup problems"
 )]
 pub struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Emit stable JSON output for diagnostic commands"
+        help = "Print JSON instead of text for scan, fixes, and check"
     )]
     pub json: bool,
     #[command(subcommand)]
@@ -59,37 +59,28 @@ pub enum CliCommand {
     #[command(
         name = "scan",
         alias = "inspect-config",
-        about = "Inspect Codex MCP config without launching servers"
+        about = "Review Codex MCP config without launching servers"
     )]
     InspectConfig,
     #[command(
-        name = "doctor",
-        alias = "profile",
-        about = "Profile all configured stdio MCP servers and report health"
-    )]
-    Profile,
-    #[command(
-        name = "explain",
-        alias = "diagnose-runtime",
-        about = "Explain static diagnostics for one server without launching it"
-    )]
-    DiagnoseRuntime { server: String },
-    #[command(
         name = "fixes",
         alias = "suggest-fixes",
-        about = "Show likely config and runtime fixes"
+        about = "Show likely config and startup fixes"
     )]
     SuggestFixes,
     #[command(
         name = "check",
         alias = "validate",
-        about = "Profile one configured stdio MCP server by name"
+        about = "Check configured local MCP servers and report health"
     )]
-    Validate { server: String },
+    Validate {
+        #[arg(value_name = "SERVER")]
+        server: Option<String>,
+    },
     #[command(
         name = "mcp-server",
         alias = "serve",
-        about = "Run the MCP server entrypoint used by Codex"
+        about = "Run the MCP server that Codex launches"
     )]
     Serve,
     #[command(about = "Configure CDXMCPFix for an MCP client")]
@@ -166,8 +157,16 @@ impl ServerReport {
     }
 
     fn fail(&mut self, evidence: impl Into<String>) {
+        let was_fail = self.status == Status::Fail;
         self.status = self.status.merge(Status::Fail);
-        self.evidence.push(evidence.into());
+        if was_fail {
+            self.evidence.push(evidence.into());
+        } else {
+            self.probable_cause = None;
+            self.suggested_fix = None;
+            self.safe_config_snippet = None;
+            self.evidence.insert(0, evidence.into());
+        }
     }
 
     fn set_cause_if_empty(&mut self, cause: impl Into<String>) {
@@ -309,18 +308,9 @@ pub async fn run_cli(cli: Cli) -> Result<i32> {
             write_output(&envelope, cli.json)?;
             Ok(exit_for(&envelope))
         }
-        CliCommand::Profile => {
-            let envelope = build_diagnostics(RunMode::ProfileAll).await?;
-            write_output(&envelope, cli.json)?;
-            Ok(exit_for(&envelope))
-        }
         CliCommand::Validate { server } => {
-            let envelope = build_diagnostics(RunMode::ProfileOne(server)).await?;
-            write_output(&envelope, cli.json)?;
-            Ok(exit_for(&envelope))
-        }
-        CliCommand::DiagnoseRuntime { server } => {
-            let envelope = build_diagnostics(RunMode::StaticOne(server)).await?;
+            let mode = server.map_or(RunMode::ProfileAll, RunMode::ProfileOne);
+            let envelope = build_diagnostics(mode).await?;
             write_output(&envelope, cli.json)?;
             Ok(exit_for(&envelope))
         }
@@ -512,7 +502,7 @@ fn write_output(envelope: &DiagnosticEnvelope, json_output: bool) -> Result<()> 
         println!("CDXMCPFix: no MCP servers discovered");
     }
     if envelope.config_error_blocks_enumeration {
-        println!("Health: completely unwired");
+        println!("Health: not working");
         println!("Meaning: {}", config_blocked_meaning());
         println!("What to do: {}", config_blocked_action());
     }
@@ -520,7 +510,7 @@ fn write_output(envelope: &DiagnosticEnvelope, json_output: bool) -> Result<()> 
         println!("Notice: {notice}");
     }
     if envelope.incomplete_effective_surface {
-        println!("Notice: effective Codex MCP surface is best-effort and incomplete");
+        println!("Notice: CDXMCPFix could not verify every MCP entry Codex may load");
     }
     for report in &envelope.servers {
         println!("Server: {}", report.name);
@@ -559,17 +549,17 @@ fn status_health_label(status: Status) -> &'static str {
     match status {
         Status::Pass => "successfully working",
         Status::Warn => "working but needs review",
-        Status::Fail => "completely unwired",
+        Status::Fail => "not working",
     }
 }
 
 fn status_meaning(status: Status) -> &'static str {
     match status {
-        Status::Pass => "CDXMCPFix completed this check and found no diagnostic concerns.",
+        Status::Pass => "CDXMCPFix completed this check and found no problems.",
         Status::Warn => {
             "CDXMCPFix could inspect this server or config, but found something that needs review."
         }
-        Status::Fail => "CDXMCPFix could not prove this server is wired and working.",
+        Status::Fail => "CDXMCPFix could not confirm this server starts and responds.",
     }
 }
 
@@ -577,20 +567,20 @@ fn status_action(status: Status) -> &'static str {
     match status {
         Status::Pass => "No action is required.",
         Status::Warn => {
-            "Review Cause, Evidence, and Suggested fix; verify client-owned or v1-limited checks from the owning Codex client."
+            "Review Cause, Evidence, and Suggested fix; confirm anything CDXMCPFix could not check directly from Codex."
         }
         Status::Fail => {
-            "Treat the server as unavailable, fix the reported command/cwd/PATH/env/transport/handshake issue, then rerun check or doctor."
+            "Treat this server as unavailable until the reported command, folder, PATH, environment, connection type, or startup issue is fixed; then rerun check."
         }
     }
 }
 
 fn config_blocked_meaning() -> &'static str {
-    "CDXMCPFix could not read or parse enough config to enumerate MCP servers."
+    "CDXMCPFix could not read enough config to list MCP servers."
 }
 
 fn config_blocked_action() -> &'static str {
-    "Fix the reported TOML, JSON, or path problem, then rerun scan before profiling servers."
+    "Fix the reported TOML, JSON, or path problem, then rerun scan before checking servers."
 }
 
 fn discover_codex_surface() -> Discovery {
@@ -640,9 +630,9 @@ fn discover_codex_surface() -> Discovery {
     discovery.notices.extend(plugin_result.notices);
     discovery.incomplete_effective_surface |= plugin_result.incomplete_effective_surface;
     apply_plugin_policy_overrides(&mut discovery.servers);
-    discovery
-        .notices
-        .push("effective surface reconstruction is best-effort in v1; unproven plugin cache or bundled/injected provenance is marked incomplete instead of guessed".to_string());
+    discovery.notices.push(
+        "CDXMCPFix could not verify every plugin or bundled MCP entry in this release; it reports that gap instead of guessing".to_string(),
+    );
     discovery.incomplete_effective_surface = true;
     discovery
 }
@@ -920,15 +910,15 @@ fn discover_plugin_servers() -> Discovery {
         roots.push(home.join(".agents").join("plugins"));
     } else {
         discovery.incomplete_effective_surface = true;
-        discovery
-            .notices
-            .push("could not locate home directory for legacy plugin cache discovery".to_string());
+        discovery.notices.push(
+            "could not find the home directory while checking the legacy plugin cache".to_string(),
+        );
     }
     for root in roots {
         if !root.exists() {
             discovery.incomplete_effective_surface = true;
             discovery.notices.push(format!(
-                "plugin cache root not found: {}",
+                "plugin cache folder not found: {}",
                 display_path(&root)
             ));
             continue;
@@ -1301,19 +1291,19 @@ fn missing_server_report(name: &str) -> ServerReport {
         cwd: None,
         env_keys_only: Vec::new(),
         timings: TimingReport::default(),
-        evidence: vec!["server name was not found in the discovered Codex MCP surface".to_string()],
+        evidence: vec![
+            "server name was not found in the MCP entries CDXMCPFix could read".to_string(),
+        ],
         probable_cause: Some(
-            "the requested MCP server is not configured or the effective surface is incomplete"
+            "the requested MCP server is not configured, or CDXMCPFix could not see every Codex MCP entry"
                 .to_string(),
         ),
         suggested_fix: Some(
-            "run cdxmcpfix scan --json and verify the server name and source provenance"
+            "run cdxmcpfix scan --json and check the server name and config source"
                 .to_string(),
         ),
         safe_config_snippet: None,
-        risk: Some(
-            "validation could not run because there is no server config to profile".to_string(),
-        ),
+        risk: Some("check could not run because there is no server config to launch".to_string()),
         managed: false,
         effective: false,
         overwritten_by: None,
@@ -1324,28 +1314,28 @@ fn missing_server_report(name: &str) -> ServerReport {
 fn apply_static_diagnostics(report: &mut ServerReport, server: &ServerConfig) {
     if server.transport == TransportKind::PolicyOverride {
         report.evidence.push(
-            "plugin MCP policy override; launch transport remains owned by plugin .mcp.json"
+            "plugin MCP policy override; launch settings still come from the plugin .mcp.json"
                 .to_string(),
         );
         return;
     }
     if !server.enabled {
         report.evidence.push(
-            "server is disabled by Codex config or plugin policy; profiling skipped".to_string(),
+            "server is disabled by Codex config or plugin policy; CDXMCPFix did not launch it"
+                .to_string(),
         );
         report.set_cause_if_empty("server disabled");
         return;
     }
     if server.transport == TransportKind::Http {
-        report.warn("HTTP/streamable HTTP server received static validation only in v1");
-        report.set_cause_if_empty("v1 profiles stdio MCP servers only");
-        report
-            .set_fix_if_empty("verify HTTP reachability with the client that owns this MCP config");
+        report.warn("HTTP/streamable HTTP server was checked from config only; CDXMCPFix did not connect to it in this release");
+        report.set_cause_if_empty("this release only launches local command-based MCP servers");
+        report.set_fix_if_empty("check HTTP reachability from Codex");
     }
     if server.transport == TransportKind::Unknown {
-        report.fail("server transport could not be inferred from command, url, or type");
-        report.set_cause_if_empty("missing or unsupported MCP transport fields");
-        report.set_fix_if_empty("set type = \"stdio\" with command/args or configure an HTTP url");
+        report.fail("server launch type could not be inferred from command, url, or type");
+        report.set_cause_if_empty("missing or unsupported MCP connection fields");
+        report.set_fix_if_empty("set type = \"stdio\" with command/args or configure an HTTP URL");
     }
 
     if let Some(cwd) = &server.cwd {
@@ -1379,10 +1369,10 @@ fn apply_static_diagnostics(report: &mut ServerReport, server: &ServerConfig) {
                 );
                 if system_resolution.is_some() {
                     report.fail(format!(
-                        "{command_for_report} resolves outside client PATH but not in CDXMCPFix client_path"
+                        "{command_for_report} is visible in your system shell but not in the PATH used here"
                     ));
                     report.set_cause_if_empty(format!(
-                        "{command_for_report} not found from GUI/client PATH"
+                        "{command_for_report} was not found in this process PATH"
                     ));
                     report.set_fix_if_empty(
                         "use an absolute executable path or add PATH in the MCP env block",
@@ -1409,13 +1399,13 @@ fn apply_static_diagnostics(report: &mut ServerReport, server: &ServerConfig) {
                 report.safe_config_snippet = Some(safe_command_snippet(&server.name));
             }
         } else if is_standalone_terminal_run() {
-            report.warn("PATH check is based on this process; standalone terminal runs may not match Codex GUI PATH");
-            report.set_cause_if_empty("PATH provenance caveat");
+            report.warn("PATH was checked from this terminal; Codex may use a different PATH");
+            report.set_cause_if_empty("Codex may use a different PATH than this terminal");
         }
     } else if server.transport == TransportKind::Stdio {
-        report.fail("stdio server is missing command");
+        report.fail("local command-based MCP server is missing command");
         report.set_cause_if_empty("missing MCP command");
-        report.set_fix_if_empty("add a command field for this stdio MCP server");
+        report.set_fix_if_empty("add a command field for this MCP server");
         report.safe_config_snippet = Some(safe_command_snippet(&server.name));
     }
 
@@ -1423,7 +1413,7 @@ fn apply_static_diagnostics(report: &mut ServerReport, server: &ServerConfig) {
         if env::var_os(key).is_none() {
             let key_for_report = redact_env_key_for_report(key);
             report.warn(format!(
-                "env var {key_for_report} is referenced by config but missing from this process"
+                "environment variable {key_for_report} is referenced by config but missing from this process"
             ));
             report.set_cause_if_empty("missing environment variable in client process");
             report.set_fix_if_empty("set the variable in the launching client environment or put a placeholder-backed value in the MCP env block");
@@ -1435,14 +1425,14 @@ fn apply_static_diagnostics(report: &mut ServerReport, server: &ServerConfig) {
         let key_for_report = redact_env_key_for_report(key);
         if value.trim().is_empty() {
             report.warn(format!(
-                "env key {key_for_report} has an empty literal value"
+                "environment variable {key_for_report} has an empty literal value"
             ));
-            report.set_cause_if_empty("suspicious empty environment value");
+            report.set_cause_if_empty("empty environment value");
         } else if is_secretish(key) || looks_secretish_value(key) || looks_secretish_value(value) {
             report.warn(format!(
-                "env key {key_for_report} contains a literal value; value redacted"
+                "environment variable {key_for_report} contains a value directly in config; value redacted"
             ));
-            report.set_cause_if_empty("literal secret-like value in MCP config");
+            report.set_cause_if_empty("secret-looking value stored directly in MCP config");
             report.set_fix_if_empty("move secrets to a dedicated environment variable and reference that name from config");
             report.safe_config_snippet = Some(safe_env_snippet(&server.name, key));
         }
@@ -1454,7 +1444,7 @@ fn apply_static_diagnostics(report: &mut ServerReport, server: &ServerConfig) {
             report.warn(format!(
                 "{key_for_report} contains a literal value; value redacted"
             ));
-            report.set_cause_if_empty("literal secret-like value in MCP config");
+            report.set_cause_if_empty("secret-looking value stored directly in MCP config");
             report.set_fix_if_empty(
                 "move secret-like OAuth or bearer values to a dedicated environment variable",
             );
@@ -1465,28 +1455,30 @@ fn apply_static_diagnostics(report: &mut ServerReport, server: &ServerConfig) {
         let key_for_report = redact_env_key_for_report(key);
         if is_secretish(key) || looks_secretish_value(key) || looks_secretish_value(value) {
             report.warn(format!(
-                "HTTP header {key_for_report} contains a literal value; value redacted"
+                "HTTP header {key_for_report} contains a value directly in config; value redacted"
             ));
-            report.set_cause_if_empty("literal secret-like HTTP header in MCP config");
-            report.set_fix_if_empty("move header secrets into env_http_headers or a client-managed environment variable");
+            report.set_cause_if_empty("secret-looking HTTP header stored directly in MCP config");
+            report.set_fix_if_empty(
+                "move header secrets into env_http_headers or an environment variable set by Codex",
+            );
         }
     }
 
     if is_heavyweight_server(&server.name, server.command.as_deref()) {
-        report.warn("server appears to be an eager heavyweight MCP server");
+        report.warn("server may do heavy startup work before it is ready");
         report.risk = Some(
-            "browser/node_repl/computer-use style servers can slow sessions that do not need them"
+            "browser, node_repl, and computer-use style servers can slow sessions that do not need them"
                 .to_string(),
         );
     }
 
     if is_known_managed_name(&server.name) && server.source_kind.contains("config") {
-        report.warn("server name resembles a bundled or injected Codex MCP server");
+        report.warn("server name looks like a Codex-managed server");
         report.set_cause_if_empty(
-            "managed/bundled MCP settings may appear editable but be overwritten by the client",
+            "Codex-managed MCP settings may appear editable but be overwritten by the client",
         );
         report.set_fix_if_empty(
-            "prefer plugin/client settings for managed servers instead of editing generated config",
+            "prefer Codex or plugin settings for managed servers instead of editing generated config",
         );
     }
 }
@@ -1522,7 +1514,7 @@ fn apply_duplicate_diagnostics(reports: &mut [ServerReport]) {
                 "server name appears in multiple discovered sources: {}",
                 sources.join(", ")
             ));
-            report.set_cause_if_empty("source/name collision in effective MCP surface");
+            report.set_cause_if_empty("same server name appears in more than one config source");
             report
                 .set_fix_if_empty("keep one owner for this server name or rename one config entry");
         }
@@ -1530,8 +1522,8 @@ fn apply_duplicate_diagnostics(reports: &mut [ServerReport]) {
     for indexes in fingerprints.values().filter(|indexes| indexes.len() > 1) {
         for idx in indexes {
             let report = &mut reports[*idx];
-            report.warn("another server has the same runtime fingerprint");
-            report.set_cause_if_empty("duplicate runtime MCP server identity");
+            report.warn("another server uses the same command, args, and environment keys");
+            report.set_cause_if_empty("duplicate MCP server configuration");
             report.set_fix_if_empty(
                 "remove or rename duplicate server definitions that launch the same command/url",
             );
@@ -1553,10 +1545,10 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
         return;
     };
     if resolves_to_self(command, server).unwrap_or(false) {
-        report.warn("self-profiling recursion guard skipped launching CDXMCPFix itself");
+        report.warn("CDXMCPFix skipped launching itself to avoid a loop");
         report.set_cause_if_empty("configured server resolves to the cdxmcpfix binary");
         report.set_fix_if_empty(
-            "do not profile CDXMCPFix from CDXMCPFix; validate the plugin entry from the Codex client",
+            "do not check CDXMCPFix from inside CDXMCPFix; validate the plugin entry from Codex",
         );
         return;
     }
@@ -1579,8 +1571,8 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
         Ok(child) => child,
         Err(err) => {
             report.fail(format!("process failed before MCP initialize: {err}"));
-            report.set_cause_if_empty("server process could not spawn");
-            report.set_fix_if_empty("fix the command, cwd, or PATH used by the launching client");
+            report.set_cause_if_empty("server process could not start");
+            report.set_fix_if_empty("fix the command, working directory, or PATH used by Codex");
             report.timings.total_profile_ms = Some(start.elapsed().as_millis());
             return;
         }
@@ -1590,7 +1582,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
     let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
-            report.fail("child stdin was unavailable");
+            report.fail("server input pipe was unavailable");
             kill_child(&mut child).await;
             return;
         }
@@ -1598,7 +1590,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            report.fail("child stdout was unavailable");
+            report.fail("server output pipe was unavailable");
             kill_child(&mut child).await;
             return;
         }
@@ -1617,7 +1609,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
                 )),
                 Ok(Some(AsyncBoundedLine::Exceeded)) => Some((
                     stderr_start.elapsed().as_millis(),
-                    "stderr line exceeded CDXMCPFix byte limit; content omitted".to_string(),
+                    "server error output line was too large; content omitted".to_string(),
                 )),
                 _ => None,
             }
@@ -1640,8 +1632,8 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
         }
     });
     if write_json_line(&mut stdin, &initialize).await.is_err() {
-        report.fail("server stdin closed before MCP initialize");
-        report.set_cause_if_empty("server exited before MCP handshake");
+        report.fail("server stopped accepting input before MCP initialize");
+        report.set_cause_if_empty("server exited before startup response");
         kill_child(&mut child).await;
         return;
     }
@@ -1662,8 +1654,10 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
         }
         Ok(Err(err)) => {
             report.fail(err);
-            report.set_cause_if_empty("server exited before MCP handshake");
-            report.set_fix_if_empty("inspect server stderr and verify it speaks MCP over stdio");
+            report.set_cause_if_empty("server exited before startup response");
+            report.set_fix_if_empty(
+                "check server error output and verify it speaks MCP over standard input/output",
+            );
             report.timings.total_profile_ms = Some(start.elapsed().as_millis());
             finish_stderr(report, stderr_task).await;
             kill_child(&mut child).await;
@@ -1705,7 +1699,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
             "params": params
         });
         if write_json_line(&mut stdin, &request).await.is_err() {
-            report.fail("server stdin closed before tools/list completed");
+            report.fail("server stopped accepting input before tools/list completed");
             report.set_cause_if_empty("server exited before tools/list");
             break;
         }
@@ -1779,7 +1773,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
     if cursor.is_some() && seen_cursors.len() >= MAX_TOOL_PAGES {
         report.fail("tools/list pagination exceeded CDXMCPFix page limit");
         report.set_cause_if_empty(
-            "tools/list pagination did not terminate within the bounded profiler",
+            "tools/list pagination did not finish within the CDXMCPFix page limit",
         );
     }
     report.timings.tools_list_ms = Some(tools_started.elapsed().as_millis());
@@ -1787,7 +1781,7 @@ async fn profile_server(report: &mut ServerReport, server: &ServerConfig) {
     if report.status == Status::Pass {
         report
             .evidence
-            .push("MCP initialize and bounded tools/list completed".to_string());
+            .push("MCP startup and tools/list completed".to_string());
     }
     finish_stderr(report, stderr_task).await;
     kill_child(&mut child).await;
@@ -1805,7 +1799,9 @@ async fn finish_stderr(
             if let Ok(Some((ms, line))) = result {
                 report.timings.first_stderr_ms = Some(ms);
                 if !line.trim().is_empty() {
-                    report.evidence.push(format!("early stderr: {line}"));
+                    report
+                        .evidence
+                        .push(format!("early server error output: {line}"));
                 }
             }
         }
@@ -1839,18 +1835,16 @@ async fn read_response(
 ) -> std::result::Result<JsonValue, String> {
     while let Some(line) = read_async_bounded_line(lines, PROFILE_OUTPUT_LINE_BYTE_LIMIT)
         .await
-        .map_err(|err| format!("failed reading stdout: {err}"))?
+        .map_err(|err| format!("failed reading server output: {err}"))?
     {
         if first_stdout_ms.is_none() {
             *first_stdout_ms = Some(start.elapsed().as_millis());
         }
         let AsyncBoundedLine::Line(line) = line else {
-            return Err(
-                "MCP stdout line exceeded CDXMCPFix byte limit; content omitted".to_string(),
-            );
+            return Err("MCP server output line was too large; content omitted".to_string());
         };
         let value: JsonValue = serde_json::from_slice(&line)
-            .map_err(|_| "non-JSON stdout before MCP response".to_string())?;
+            .map_err(|_| "server printed non-JSON output before MCP response".to_string())?;
         if value.get("id").and_then(JsonValue::as_u64) == Some(id) {
             if let Some(error) = value.get("error") {
                 return Err(format!(
@@ -1861,7 +1855,7 @@ async fn read_response(
             return Ok(value);
         }
     }
-    Err("server exited before MCP response".to_string())
+    Err("server exited before responding to the MCP startup request".to_string())
 }
 
 fn resolve_cwd(server: &ServerConfig, cwd: &str) -> PathBuf {
@@ -2726,17 +2720,17 @@ fn mcp_tool_definitions() -> JsonValue {
     json!([
         {
             "name": "inspect_mcp_config",
-            "description": "Read Codex MCP config and report static diagnostics without launching servers.",
+            "description": "Read Codex MCP config and report issues without launching servers.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
             "name": "profile_mcp_startup",
-            "description": "Launch configured stdio MCP servers with short timeouts and report startup/handshake diagnostics.",
+            "description": "Launch configured local command-based MCP servers with short timeouts and report startup results.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
             "name": "validate_mcp_server",
-            "description": "Profile one configured stdio MCP server by name.",
+            "description": "Check one configured local command-based MCP server by name.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "name": { "type": "string" } },
@@ -2746,7 +2740,7 @@ fn mcp_tool_definitions() -> JsonValue {
         },
         {
             "name": "diagnose_runtime",
-            "description": "Run static runtime diagnostics for one configured MCP server without launching it.",
+            "description": "Review one configured MCP server without launching it.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "name": { "type": "string" } },
@@ -2756,7 +2750,7 @@ fn mcp_tool_definitions() -> JsonValue {
         },
         {
             "name": "suggest_config_fixes",
-            "description": "Return safe, redacted config fix suggestions without editing files.",
+            "description": "Return safe config fix suggestions without editing files.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         }
     ])
@@ -2851,10 +2845,40 @@ mod tests {
             status_health_label(Status::Warn),
             "working but needs review"
         );
-        assert_eq!(status_health_label(Status::Fail), "completely unwired");
+        assert_eq!(status_health_label(Status::Fail), "not working");
         assert!(status_meaning(Status::Warn).contains("needs review"));
-        assert!(status_action(Status::Fail).contains("rerun check or doctor"));
+        assert!(status_action(Status::Fail).contains("rerun check"));
+        assert!(!status_action(Status::Fail).contains("doctor"));
         assert!(config_blocked_action().contains("rerun scan"));
+    }
+
+    #[test]
+    fn fail_diagnostics_take_precedence_over_prior_warnings() {
+        let server = minimal_test_server("demo", TransportKind::Stdio);
+        let mut report = static_report_for(&server);
+
+        report.warn("PATH was checked from this terminal");
+        report.set_cause_if_empty("Codex may use a different PATH than this terminal");
+        report.set_fix_if_empty("use an absolute executable path");
+        report.fail("server exited before responding to the MCP startup request");
+        report.set_cause_if_empty("server exited before startup response");
+        report.set_fix_if_empty(
+            "check server error output and verify it speaks MCP over standard input/output",
+        );
+
+        assert_eq!(report.status, Status::Fail);
+        assert_eq!(
+            report.evidence.first().map(String::as_str),
+            Some("server exited before responding to the MCP startup request")
+        );
+        assert_eq!(
+            report.probable_cause.as_deref(),
+            Some("server exited before startup response")
+        );
+        assert_eq!(
+            report.suggested_fix.as_deref(),
+            Some("check server error output and verify it speaks MCP over standard input/output")
+        );
     }
 
     #[test]
@@ -3316,7 +3340,7 @@ for line in sys.stdin:
         profile_server(&mut report, &server).await;
         let evidence = report.evidence.join(" | ");
 
-        assert!(evidence.contains("stderr line exceeded CDXMCPFix byte limit"));
+        assert!(evidence.contains("server error output line was too large"));
         assert!(evidence.len() < 1_000);
     }
 
@@ -3345,7 +3369,7 @@ for line in sys.stdin:
         let evidence = report.evidence.join(" | ");
 
         assert_eq!(report.status, Status::Fail);
-        assert!(evidence.contains("MCP stdout line exceeded CDXMCPFix byte limit"));
+        assert!(evidence.contains("MCP server output line was too large"));
         assert!(evidence.len() < 1_000);
     }
 
@@ -3860,7 +3884,7 @@ client_id = "client-id-literal"
         let evidence = report.evidence.join(" | ");
 
         assert_eq!(report.status, Status::Warn);
-        assert!(evidence.contains("static validation only"));
+        assert!(evidence.contains("checked from config only"));
         assert!(evidence.contains("MISSING_CDXMCPFIX_REVIEW_TOKEN"));
         assert!(evidence.contains("HTTP header Authorization"));
     }

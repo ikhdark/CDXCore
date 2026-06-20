@@ -19,7 +19,10 @@ fn top_level_help_mentions_setup_and_mcp_server() {
     let stdout = cdxmcpfix_output(&["--help"]);
 
     assert!(stdout.contains("setup"));
+    assert!(stdout.contains("check"));
     assert!(stdout.contains("mcp-server"));
+    assert!(!stdout.contains("doctor"));
+    assert!(!stdout.contains("explain"));
     assert!(!stdout.contains("guard-hook"));
 }
 

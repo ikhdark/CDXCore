@@ -1,7 +1,7 @@
 {
   "name": "cdxmcpfix",
   "version": "0.1.5",
-  "description": "Read-only MCP startup and configuration diagnostics for Codex.",
+  "description": "Read-only MCP startup and config checks for Codex.",
   "author": {
     "name": "CDXMCPFix"
   },
@@ -9,13 +9,13 @@
   "interface": {
     "displayName": "CDXMCPFix",
     "shortDescription": "Diagnose MCP startup and config problems without editing files.",
-    "longDescription": "CDXMCPFix inspects Codex MCP configuration and profiles configured stdio MCP server startup with bounded, read-only diagnostics.",
+    "longDescription": "CDXMCPFix reviews Codex MCP config and checks command-based MCP server startup without editing files.",
     "developerName": "CDXMCPFix",
     "category": "Developer Tools",
     "capabilities": [
-      "MCP diagnostics",
+      "MCP config checks",
       "Codex config inspection",
-      "Read-only startup profiling"
+      "Read-only startup checks"
     ],
     "defaultPrompt": "Diagnose my Codex MCP configuration with CDXMCPFix."
   }

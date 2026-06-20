@@ -8,7 +8,7 @@
 
 ## v1 scope (unchanged)
 
-CDXMCPFix v1 is a **Codex-only, strictly read-only MCP startup/config profiler**.
+CDXMCPFix v1 is a **Codex-only, strictly read-only MCP config and startup checker**.
 v3 does not change v1. No v3 behavior ships in the MVP.
 
 ## v3 name
@@ -33,40 +33,39 @@ Reader coverage is staged, Codex first:
 
 ## Why it fits
 
-v3 should extend v1's diagnostic model rather than introducing a new trust
-surface. The current v1 implementation is Codex-specific, so v3 work must first
-extract a client-reader abstraction before adding Claude Desktop, Cursor,
-Windsurf, or VS Code readers. Once that exists, v3 can enumerate known client
-config locations, run the per-server diagnostics across all of them, and
-aggregate the results.
+v3 should extend v1's check model rather than adding a new kind of access. The
+current v1 implementation is Codex-specific, so v3 work must first extract
+client readers before adding Claude Desktop, Cursor, Windsurf, or VS Code
+readers. Once that exists, v3 can list known client config locations, run the
+per-server checks across all of them, and aggregate the results.
 
 ## Trust model
 
-v3 **remains read-only**, the same trust proposition as v1. It crosses no state
+v3 **remains read-only**, the same safety promise as v1. It crosses no state
 or control line. (Command Guard now lives in the separate CDXCoreGuard tool and remains outside v3 fleet inspection.)
 
-## Command surface and the static-vs-profile distinction
+## Commands
 
-This distinction is load-bearing and mirrors v1's own static-vs-profile split:
+This distinction is load-bearing and mirrors v1's own config-only vs startup-check split:
 
-- **`cdxmcpfix scan`** — performs **static config / provenance diagnostics only**.
+- **`cdxmcpfix scan`** — reviews **config and source information only**.
   It reads config files and reasons about them. It does **not** launch any
   configured MCP server.
-- **`cdxmcpfix scan --profile`** — may **explicitly launch and profile configured
-  stdio MCP servers** for startup/handshake timing, under the same read-only
-  profiling rules as v1 (short timeouts, `initialize` + bounded `tools/list`
+- **`cdxmcpfix scan --profile`** — may **explicitly launch and check configured
+  command-based MCP servers** for startup timing, under the same read-only
+  rules as v1 (short timeouts, `initialize` + bounded `tools/list`
   only, no arbitrary tool calls, guaranteed child-process termination).
 
 Launching servers happens **only** under the explicit `--profile` flag, never on
 a bare `scan`.
 
-### Transport limit (inherited from v1)
+### Connection Limit
 
-v3 inherits v1's transport limit: **only stdio servers can be profiled.**
-HTTP / streamable HTTP configs receive **static validation only** and are not
-launched or handshake-profiled, even under `--profile`. A fleet scan across
+v3 inherits v1's connection limit: **only command-based servers can be launched and checked.**
+HTTP / streamable HTTP configs receive **config-only validation** and are not
+launched or connected, even under `--profile`. A fleet scan across
 clients such as Claude Desktop or Cursor will commonly encounter HTTP servers;
-these are statically validated, not profiled.
+these are checked from config, not launched.
 
 ## Cross-client findings
 
@@ -75,9 +74,9 @@ from looking across clients together:
 
 - the **same server duplicated across clients**
 - the **same broken `npx` / `node` / `uv` PATH issue** affecting multiple clients
-- **conflicting names or identity fingerprints** across clients
-- **managed / bundled / injected provenance differences** between clients
-- **config source ambiguity** (which file/layer a server actually came from)
+- **conflicting names or duplicate server identities** across clients
+- **managed, bundled, or injected entries that differ between clients**
+- **unclear config source** (which file or layer a server actually came from)
 
 ## Secret handling (inherited from v1)
 
@@ -89,9 +88,9 @@ any field.
 
 ## Relationship to CDXCoreGuard
 
-The former v2 command guard is now the separate CDXCoreGuard tool. v3 remains a read-only extension of the profiler and does not depend on CDXCoreGuard.
+The former v2 command guard is now the separate CDXCoreGuard tool. v3 remains a read-only extension of CDXMCPFix and does not depend on CDXCoreGuard.
 
 ## Reaffirmation
 
-v1 remains a Codex-only, read-only MCP startup/config profiler. No fleet-scan,
+v1 remains a Codex-only, read-only MCP config and startup checker. No fleet-scan,
 no cross-client behavior, and no v3 implementation ships in the MVP.

@@ -1,20 +1,20 @@
 # CDXMCPFix
 
-CDXMCPFix is a Codex MCP diagnostics and startup profiler.
+CDXMCPFix finds Codex MCP config and startup problems.
 
 It gives Codex a local support layer for MCP startup problems, confusing client config, and PATH differences. If an MCP server
 works in your terminal but Codex cannot start it, CDXMCPFix helps answer the
-boring but important questions:
+practical questions:
 
 - Which Codex config did this server come from?
 - Is the command actually on the PATH Codex sees?
 - Is `node`, `npx`, `uv`, `python`, `pnpm`, or `bun` missing?
 - Is the working directory wrong?
-- Did the server exit before the MCP `initialize` handshake?
+- Did the server exit before MCP startup finished?
 - Did `tools/list` hang, return bad tools, or miss `inputSchema`?
 - Are plugin, bundled, or managed MCP entries confusing the picture?
 
-Command Guard moved to the standalone CDXCoreGuard tool. CDXMCPFix stays focused on the v1 read-only MCP profiler.
+Command Guard moved to the standalone CDXCoreGuard tool. CDXMCPFix stays focused on read-only MCP config and startup checks.
 
 Do not install CDXMCPFix through an MCP marketplace for normal use. Install the
 `cdxmcpfix` CLI, then let Codex launch `cdxmcpfix mcp-server`.
@@ -60,20 +60,24 @@ Restart Codex after install so the app sees the updated PATH.
 Most of the time, start here:
 
 ```powershell
-cdxmcpfix doctor
+cdxmcpfix check
 ```
 
-That inspects your Codex MCP config and briefly starts each configured stdio MCP
-server to time startup and the MCP handshake. It kills child processes after
-profiling.
+That reviews your Codex MCP config and briefly starts each configured
+command-based MCP server to time startup. It stops child processes after each
+check.
+
+Use `cdxmcpfix check <server>` for the same config review plus startup check
+focused on one server.
 
 Example report:
 
 ```text
 Server: notion
-Status: fail (completely unwired)
-Meaning: CDXMCPFix could not prove this server is wired and working.
-What to do: Treat the server as unavailable, fix the reported command/cwd/PATH/env/transport/handshake issue, then rerun check or doctor.
+Status: fail (not working)
+Meaning: CDXMCPFix could not confirm this server starts and responds.
+What to do: Treat this server as unavailable until the reported command, folder,
+PATH, environment, connection type, or startup issue is fixed; then rerun check.
 Cause: npx not found from Codex PATH
 Evidence: command failed before MCP initialize
 Suggested fix: use an absolute Node/npm path or add PATH in the MCP env block
@@ -85,51 +89,49 @@ Suggested command order:
 
 ```powershell
 cdxmcpfix scan
-cdxmcpfix doctor
-cdxmcpfix explain <server>
+cdxmcpfix check
 cdxmcpfix fixes
 cdxmcpfix check <server>
 cdxmcpfix mcp-server
 ```
 
-Older names remain available as aliases: `inspect-config`, `profile`,
-`diagnose-runtime`, `suggest-fixes`, `validate`, and `serve`.
+Older names remain available as aliases: `inspect-config`, `suggest-fixes`,
+`validate`, and `serve`.
 
-Add `--json` when you want machine-readable output:
+Add `--json` when you want JSON output:
 
 ```powershell
-cdxmcpfix doctor --json
+cdxmcpfix check --json
 ```
 
 The JSON schema is `cdxmcpfix.diagnostics.v1` and lives at
 `schemas/cdxmcpfix.diagnostics.v1.schema.json`.
 
-Diagnostic exit codes:
+Exit codes:
 
-- `0`: successfully working; diagnostics completed with `pass`
-- `1`: working but needs review; diagnostics completed with `warn`
-- `2`: completely unwired; diagnostics completed with `fail`, or config could
-  not be read or parsed enough to enumerate servers
+- `0`: working; the check completed with `pass`
+- `1`: working but needs review; the check completed with `warn`
+- `2`: not working; the check completed with `fail`, or config could not be
+  read or parsed enough to list servers
 
 CLI parser errors and unexpected internal CDXMCPFix errors are not health results.
 
 Health meanings:
 
 - `pass` / exit `0` means CDXMCPFix completed the requested check and found no
-  diagnostic concerns. No action is required.
+  problems. No action is required.
 - `warn` / exit `1` means the server or config appears reachable enough to
   inspect, but CDXMCPFix found something that needs review. Read `Cause`,
-  `Evidence`, and `Suggested fix`; common actions are verifying the result from
-  the Codex client that owns the config, moving literal secrets into environment
-  variables, or confirming that a v1 limitation such as HTTP static-only checks
-  is acceptable.
-- `fail` / exit `2` means CDXMCPFix could not prove the server is wired and
-  working. Treat the server as unavailable until the reported command, cwd,
-  PATH, env, transport, or MCP handshake problem is fixed, then rerun
-  `cdxmcpfix check <server>` or `cdxmcpfix doctor`.
-- Config blocked / exit `2` means CDXMCPFix could not read or parse enough config
-  to enumerate servers. Fix the reported TOML/JSON/path problem first, then run
-  `cdxmcpfix scan` before profiling individual servers.
+  `Evidence`, and `Suggested fix`; common actions are checking the result in
+  Codex, moving literal secrets into environment variables, or confirming that a
+  v1 limitation such as HTTP config-only checks is acceptable.
+- `fail` / exit `2` means CDXMCPFix could not confirm the server starts and
+  responds. Treat the server as unavailable until the reported command, working
+  directory, PATH, environment, connection type, or startup problem is fixed,
+  then rerun `cdxmcpfix check <server>` or `cdxmcpfix check`.
+- Config blocked / exit `2` means CDXMCPFix could not read enough config to list
+  servers. Fix the reported TOML/JSON/path problem first, then run
+  `cdxmcpfix scan` before checking individual servers.
 
 ## What `cdxmcpfix mcp-server` Is
 
@@ -151,34 +153,34 @@ CDXMCPFix can report:
 
 - missing config files
 - invalid TOML or JSON
-- duplicate names across discovered surfaces
-- duplicate runtime fingerprints
+- duplicate names across config sources
+- duplicate server commands
 - missing executables
 - bad working directories
 - PATH mismatch between a terminal shell and the Codex process environment
-- missing or suspicious env/header/OAuth values
-- stdio servers that exit before `initialize`
+- missing or suspicious environment, header, or OAuth values
+- command-based servers that exit before `initialize`
 - slow or timed-out `initialize`
 - slow or timed-out `tools/list`
 - missing tool `inputSchema`
 - bounded `tools/list` pagination problems
 - plugin `.mcp.json` servers
 - plugin MCP policy overrides
-- bundled or managed entries when provenance is locally discoverable
+- bundled or managed entries when CDXMCPFix can identify where they came from
 
-HTTP and streamable HTTP servers are static-checked only in this release. CDXMCPFix
-does not profile HTTP MCP servers yet.
+HTTP and streamable HTTP servers are checked from config only in this release.
+CDXMCPFix does not connect to HTTP MCP servers yet.
 
-Effective surface reconstruction is best-effort. If CDXMCPFix cannot prove where a
-plugin cache entry, bundled server, or injected server came from, it marks the
-report incomplete instead of guessing.
+CDXMCPFix may not be able to identify every plugin-provided or bundled MCP entry
+in v1. When it cannot verify an entry, it marks the report incomplete instead of
+guessing.
 
 ## Secrets
 
-CDXMCPFix is built to be safe to paste back into an AI session.
+CDXMCPFix is built to be safe to share.
 
 It does not print raw env values by default. It redacts args, headers, OAuth
-fields, URL userinfo/query values, stdout/stderr evidence, safe snippets, and
+fields, URL userinfo/query values, server output, suggested snippets, and
 JSON/TOML values under secret-looking keys.
 
 Secret-looking terms include:
@@ -192,8 +194,8 @@ Suggested config snippets use placeholders such as `${TOKEN_ENV_VAR}` or
 
 ## Read-Only Promise
 
-The diagnostic commands and MCP tools do not edit your MCP configs, delete
-state, reset state, or call arbitrary MCP tools.
+The check commands and MCP tools do not edit your MCP configs, delete state,
+reset state, or call arbitrary MCP tools.
 
 The only command that writes Codex config is:
 
@@ -203,8 +205,8 @@ cdxmcpfix setup codex
 
 That setup command is explicit. It installs only the CDXMCPFix MCP entry.
 
-Profiling launches configured stdio MCP servers only when you run `doctor`,
-`check <server>`, or the matching MCP diagnostic tool.
+CDXMCPFix launches configured command-based MCP servers only when you run
+`check`, `check <server>`, or the matching MCP tool.
 
 ## If PATH Is Weird
 
@@ -248,7 +250,7 @@ The plugin wrapper runs:
 }
 ```
 
-If Codex cannot resolve `cdxmcpfix` from its GUI/client PATH, use an absolute path
+If Codex cannot find `cdxmcpfix` from its app PATH, use an absolute path
 to the binary in `.mcp.json`.
 
 ## Updating
